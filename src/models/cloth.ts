@@ -353,17 +353,17 @@ export const cloth: ModelDefinition = {
   params: [
     { kind: "number", key: "spectrumLift", label: "Spectrum lift", min: 0, max: 4, step: 0.05, default: 1.2, group: "Music",
       description: "How high loud frequencies lift their part of the curtain. High values fling the hem into the air." },
-    { kind: "number", key: "billow", label: "Bass billow", min: 0, max: 4, step: 0.05, default: 0.8, group: "Music",
+    { kind: "number", key: "billow", label: "Bass billow", min: 0, max: 4, step: 0.05, default: 0.8, group: "Music", global: "energy",
       description: "How much the bass lifts the whole curtain at once." },
-    { kind: "number", key: "punch", label: "Hit punch", min: 0, max: 4, step: 0.05, default: 1, group: "Music",
+    { kind: "number", key: "punch", label: "Hit punch", min: 0, max: 4, step: 0.05, default: 1, group: "Music", global: "energy",
       description: "How hard kicks, snares and notes shove the silk." },
     gravityModeParam("down"),
     {
-      kind: "number", key: "gravity", label: "Gravity strength", min: 0, max: 5000, step: 10, default: 700, group: "Gravity",
+      kind: "number", key: "gravity", label: "Gravity strength", min: 0, max: 5000, step: 10, default: 700, group: "Gravity", global: "gravity",
       description: "How heavy the silk hangs. Low floats like chiffon; very high stretches and rips it.",
     },
     {
-      kind: "number", key: "wind", label: "Wind", min: -4000, max: 4000, step: 10, default: 60, group: "Forces",
+      kind: "number", key: "wind", label: "Wind", min: -4000, max: 4000, step: 10, default: 60, group: "Forces", global: "energy",
       description: "A gusty sideways breeze. Negative blows left, positive blows right.",
     },
     {
@@ -403,9 +403,14 @@ export const cloth: ModelDefinition = {
     },
   ],
   macros: [
-    { key: "storm", label: "Storm", targets: [{ param: "wind", amount: 0.4 }, { param: "punch", amount: 0.3 }, { param: "stiffness", amount: -0.1 }] },
-    { key: "float", label: "Weightless", targets: [{ param: "gravity", amount: -0.12 }, { param: "spectrumLift", amount: 0.2 }, { param: "afterglow", amount: 0.3 }] },
-    { key: "shred", label: "Heavy & brittle", targets: [{ param: "gravity", amount: 0.5 }, { param: "tearLimit", amount: -0.3 }] },
+    { key: "storm", label: "Storm", description: "A gale whips the silk sideways and every hit slams into it.",
+      targets: [{ param: "wind", amount: 0.15 }, { param: "punch", amount: 0.6 }, { param: "stiffness", amount: -0.15 }, { param: "afterglow", amount: 0.2 }] },
+    { key: "float", label: "Weightless", description: "The silk floats up and drifts with the music in a dreamy haze.",
+      targets: [{ param: "gravity", amount: -0.1 }, { param: "spectrumLift", amount: 0.2 }, { param: "billow", amount: 0.15 }, { param: "afterglow", amount: 0.35 }, { param: "zoom", amount: 0.2 }] },
+    { key: "shred", label: "Shred", description: "Heavy, brittle silk that rips to ribbons on every hit, then knits back together.",
+      targets: [{ param: "gravity", amount: 0.12 }, { param: "tearLimit", amount: -0.2 }, { param: "heal", amount: 0.1 }, { param: "punch", amount: 0.4 }, { param: "tearable", set: true, at: 0.1 }] },
+    { key: "vortex", label: "Vortex", description: "Gravity swirls the silk round the centre inside a turning tunnel.",
+      targets: [{ param: "afterglow", amount: 0.35 }, { param: "spin", amount: 0.4 }, { param: "zoom", amount: -0.3 }, { param: "gravityMode", set: "swirl", at: 0.3 }] },
   ],
   modulations: [
     { source: "lfoBar", target: "wind", amount: 0.08 },

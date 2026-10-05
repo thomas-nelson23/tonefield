@@ -32,6 +32,8 @@ let running = true;
 let accumulator = 0;
 let lastTime = performance.now();
 let fps = 0;
+/** The global colour filter currently on the canvas. */
+let canvasFilterShown = "";
 
 const studio = new Studio();
 
@@ -163,7 +165,8 @@ function frame(now: number): void {
   if (running) {
     // Fixed-timestep integration keeps physics stable on 60Hz and 120Hz screens alike.
     const dt = def.fixedDt ?? 1 / 60;
-    accumulator += elapsed;
+    // The global Speed control runs the clock faster or slower for every model.
+    accumulator += elapsed * (studio.globals().speed as number);
     let steps = 0;
     while (accumulator >= dt && steps < MAX_STEPS_PER_FRAME) {
       model.step(dt, effective, music);
@@ -178,6 +181,8 @@ function frame(now: number): void {
     g.fillRect(0, 0, view.width, view.height);
   }
   model.render(g, view, effective, music);
+  const filter = studio.canvasFilter();
+  if (filter !== canvasFilterShown) canvas.style.filter = canvasFilterShown = filter;
 
   const extra = model.stats?.();
   statsEl.textContent = `${Math.round(fps)} fps${extra ? ` · ${extra}` : ""}`;

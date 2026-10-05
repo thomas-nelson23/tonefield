@@ -1,5 +1,6 @@
 import type { ModelDefinition, MusicFrame, NoteEvent, ParamValues, PointerInput, SimulationModel, Viewport } from "./types";
 import { Feedback, applyFeedback, colourParam, feedbackParams, hueToward, schemeHue } from "./lib/visual";
+import { gravityAt, gravityModeParam, isUniform } from "./lib/gravity";
 
 /**
  * Vibration modes of a square plate, (n, m, sign), ordered roughly by pitch.
@@ -52,6 +53,7 @@ class CymaticsSim implements SimulationModel {
   private pointer: { x: number; y: number } | null = null;
   private fb = new Feedback();
   private stepped = false;
+  private time = 0;
 
   reset(view: Viewport, p: ParamValues): void {
     this.view = view;
@@ -166,6 +168,12 @@ class CymaticsSim implements SimulationModel {
     const drift = (0.15 + (p.vibration as number) * 0.25) * dt;
     const norm = 1 / (Math.PI * busy);
     const { gx, gy } = this;
+    // Gravity tilts the plate: sand slides that way, and only the nodal lines hold it back.
+    this.time += dt;
+    const gMode = p.gravityMode as string, gPull = (p.fieldGravity as number) * dt;
+    const tilted = gMode !== "off" && gPull > 0;
+    const uniform = isUniform(gMode);
+    const [ugx, ugy] = uniform ? gravityAt(gMode, gPull, 0, 0, 1, 1, this.time) : [0, 0];
     let px = -1, py = -1;
     if (this.pointer) {
       const [ox, oy, s] = this.plate();
@@ -186,6 +194,13 @@ class CymaticsSim implements SimulationModel {
       const kick = Math.abs(a) * jitter + drift;
       x += (Math.random() - 0.5) * kick;
       y += (Math.random() - 0.5) * kick;
+      if (tilted) {
+        if (uniform) { x += ugx; y += ugy; }
+        else {
+          const [ax, ay] = gravityAt(gMode, gPull, x, y, 1, 1, this.time, 0.05);
+          x += ax; y += ay;
+        }
+      }
       if (px >= 0 && (x - px) ** 2 + (y - py) ** 2 < 0.004) {
         x += (Math.random() - 0.5) * 0.04;
         y += (Math.random() - 0.5) * 0.04;
@@ -283,27 +298,35 @@ export const chladni: ModelDefinition = {
       description: "Which vibration pattern the plate rings in. Higher modes draw busier figures." },
     { kind: "number", key: "turn", label: "Turning", min: -120, max: 120, step: 1, default: 6, group: "Shape",
       description: "How fast the round plate's pattern turns, degrees per second. Speeds up when the music is loud." },
-    { kind: "number", key: "punch", label: "Hit shake", min: 0, max: 4, step: 0.05, default: 1, group: "Music",
+    { kind: "number", key: "punch", label: "Hit shake", min: 0, max: 4, step: 0.05, default: 1, group: "Music", global: "energy",
       description: "How hard drums and notes shake the sand off the lines." },
-    { kind: "number", key: "loudShake", label: "Loudness shake", min: 0, max: 6, step: 0.1, default: 1.5, group: "Music",
+    { kind: "number", key: "loudShake", label: "Loudness shake", min: 0, max: 6, step: 0.1, default: 1.5, group: "Music", global: "energy",
       description: "How much loud music keeps the sand churning between hits." },
-    { kind: "number", key: "vibration", label: "Vibration", min: 0, max: 12, step: 0.05, default: 1, group: "Behaviour",
+    { kind: "number", key: "vibration", label: "Vibration", min: 0, max: 12, step: 0.05, default: 1, group: "Behaviour", global: "energy",
       description: "How hard the plate shakes all the time. High values blow the sand into a churning haze." },
     { kind: "number", key: "settle", label: "Settling speed", min: 0, max: 12, step: 0.05, default: 1.6, group: "Behaviour",
       description: "How fast sand slides onto the still lines. High values snap each figure sharp." },
+    gravityModeParam("off", undefined, { description: "Tilts the plate so the sand slides that way, pooling along the lines it can't cross." }),
+    { kind: "number", key: "fieldGravity", label: "Tilt", min: 0, max: 1.5, step: 0.01, default: 0.25, group: "Gravity", global: "gravity",
+      description: "How steeply the plate tilts. High values pour the sand off the figure into a heap." },
     colourParam("notes"),
     { kind: "number", key: "secondHue", label: "Second colour", min: 0, max: 360, step: 5, default: 160, group: "Look",
       description: "How far round the colour wheel the bouncing sand is from the settled sand." },
-    { kind: "number", key: "grainSize", label: "Grain size", min: 0.5, max: 5, step: 0.1, default: 1.8, group: "Look",
+    { kind: "number", key: "grainSize", label: "Grain size", min: 0.5, max: 5, step: 0.1, default: 1.8, group: "Look", global: "size",
       description: "How big each grain is drawn. Treble makes them sparkle bigger." },
     ...feedbackParams(0.7, 0, 0),
     { kind: "number", key: "grains", label: "Grains", min: 2000, max: 40000, step: 1000, default: 16000, resetOnChange: true, group: "Setup",
       description: "How many grains of sand are on the plate. More grains draw finer lines." },
   ],
   macros: [
-    { key: "agitate", label: "Agitate", targets: [{ param: "vibration", amount: 0.6 }, { param: "settle", amount: -0.3 }, { param: "grainSize", amount: 0.2 }] },
-    { key: "mandala", label: "Mandala", targets: [{ param: "turn", amount: 0.3 }, { param: "afterglow", amount: 0.25 }, { param: "spin", amount: 0.15 }] },
-    { key: "settle", label: "Settle", targets: [{ param: "settle", amount: 0.8 }, { param: "vibration", amount: -0.5 }] },
+    { key: "agitate", label: "Agitate", description: "Shakes the plate so hard the figure boils into a glittering haze.",
+      targets: [{ param: "vibration", amount: 0.7 }, { param: "settle", amount: -0.4 }, { param: "grainSize", amount: 0.3 }, { param: "punch", amount: 0.5 }] },
+    { key: "mandala", label: "Mandala", description: "Switches to the round plate and spins its mandala down a tunnel.",
+      targets: [{ param: "turn", amount: 0.5 }, { param: "afterglow", amount: 0.25 }, { param: "spin", amount: 0.3 }, { param: "zoom", amount: 0.2 }, { param: "plate", set: "round", at: 0.1 }] },
+    { key: "crystal", label: "Crystal", description: "Freezes the sand into razor-sharp, glowing lines.",
+      targets: [{ param: "settle", amount: 1 }, { param: "vibration", amount: -0.6 }, { param: "grainSize", amount: -0.2 }, { param: "afterglow", amount: 0.2 }, { param: "secondHue", amount: 0.3 }] },
+    { key: "storm", label: "Sandstorm", description: "A swirling wind tears the sand off the plate into a turning storm.",
+      targets: [{ param: "fieldGravity", amount: 0.15 }, { param: "vibration", amount: 0.4 }, { param: "settle", amount: -0.1 }, { param: "afterglow", amount: 0.15 }, { param: "spin", amount: 0.4 }, { param: "gravityMode", set: "swirl", at: 0.15 }] },
   ],
   modulations: [
     { source: "kick", target: "grainSize", amount: 0.3 },

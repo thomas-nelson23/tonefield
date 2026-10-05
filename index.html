@@ -23,10 +23,6 @@
           <button id="step" type="button">Step</button>
           <button id="reset" type="button">Reset</button>
         </section>
-        <section id="macros-section" hidden>
-          <div class="section-label">Macros</div>
-          <div id="macros"></div>
-        </section>
         <section>
           <div class="section-label">Parameters</div>
           <div id="params"></div>
@@ -44,6 +40,7 @@
         <section id="dock">
           <nav id="dock-tabs">
             <button type="button" data-tab="sequencer" class="active">Sequencer</button>
+            <button type="button" data-tab="global">Global &amp; macros</button>
             <button type="button" data-tab="modulation">Modulation</button>
             <button type="button" data-tab="midi">MIDI</button>
             <button type="button" data-tab="audio">Audio file</button>
@@ -114,6 +111,24 @@
                 <div id="melody-controls" class="part-sliders"></div>
               </section>
             </div>
+            <div class="tab" data-tab="global" hidden>
+              <div class="global-layout">
+                <div class="global-main">
+                  <div class="section-label">Global controls <span class="label-note">· the same in every model</span></div>
+                  <div id="global-controls"></div>
+                  <div class="row-buttons">
+                    <button type="button" id="global-reset" title="Put every global control back to neutral">Reset global controls</button>
+                  </div>
+                </div>
+                <div class="global-macros">
+                  <div class="section-label">Macros <span class="label-note">· <span id="macros-model"></span></span></div>
+                  <div id="macros"></div>
+                  <div class="row-buttons">
+                    <button type="button" id="macros-reset" title="Turn every macro back to zero">Zero macros</button>
+                  </div>
+                </div>
+              </div>
+            </div>
             <div class="tab" data-tab="modulation" hidden>
               <div class="mod-layout">
                 <div class="mod-side">
@@ -151,7 +166,7 @@
                   <div class="row-buttons">
                     <button type="button" id="midi-learn">MIDI learn</button>
                   </div>
-                  <p id="midi-learn-help" class="muted">Click MIDI learn, click a slider or macro, then move a knob on your controller.</p>
+                  <p id="midi-learn-help" class="muted">Click MIDI learn, click a slider, macro or global control, then move a knob on your controller.</p>
                   <div id="midi-bindings"></div>
                 </div>
               </div>

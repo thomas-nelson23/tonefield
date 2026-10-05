@@ -51,14 +51,16 @@ export function renderParamControls(
     if (!body) {
       const details = document.createElement("details");
       details.className = "param-group";
-      details.open = !collapsed.has(group);
+      // Remembered per panel, so folding "Gravity" in the sidebar leaves the global one alone.
+      const name = targetPrefix + group;
+      details.open = !collapsed.has(name);
       const summary = document.createElement("summary");
       summary.textContent = group;
       body = document.createElement("div");
       details.append(summary, body);
       details.addEventListener("toggle", () => {
-        if (details.open) collapsed.delete(group);
-        else collapsed.add(group);
+        if (details.open) collapsed.delete(name);
+        else collapsed.add(name);
         saveCollapsed(collapsed);
       });
       container.append(details);

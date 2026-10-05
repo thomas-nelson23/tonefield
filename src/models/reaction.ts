@@ -1,7 +1,8 @@
 import type { ModelDefinition, MusicFrame, NoteEvent, ParamValues, PointerInput, SimulationModel, Viewport } from "./types";
 import { noteHash } from "./lib/music";
 import { Raster, hsl, palette } from "./lib/raster";
-import { hueToward } from "./lib/visual";
+import { Feedback, applyFeedback, feedbackParams, hueToward } from "./lib/visual";
+import { gravityAt, gravityModeParam, isUniform } from "./lib/gravity";
 
 /** Feed and kill rates for well-known Gray–Scott regimes. */
 const PRESETS: Record<string, [number, number]> = {
@@ -50,6 +51,9 @@ class ReactionSim implements SimulationModel {
   private lutHue = -1;
   private lut: Uint32Array = PALETTES.ocean;
   private flash = 0;
+  private fb = new Feedback();
+  private stepped = false;
+  private time = 0;
 
   reset(view: Viewport, p: ParamValues): void {
     this.cell = p.cellSize as number;
@@ -111,6 +115,10 @@ class ReactionSim implements SimulationModel {
     this.flash = Math.max(this.flash * Math.exp(-dt * 5), m.kick * 0.5);
     this.hue = hueToward(this.hue, m.hue, dt * 1.5);
     if (this.brush) this.paint(this.brush.x / this.cell, this.brush.y / this.cell, (p.brush as number) / this.cell, this.brush.erase);
+    this.stepped = true;
+    this.time += dt;
+    const flow = ((p.fieldGravity as number) * dt) / this.cell;
+    if (p.gravityMode !== "off" && flow > 0) this.advect(p.gravityMode as string, flow);
     const iters = p.speed as number;
     const { w, h, feed, kill } = this;
     const df = (p.feedShift as number) || 0;
@@ -141,6 +149,35 @@ class ReactionSim implements SimulationModel {
       this.b = nb; this.nb = b;
     }
     this.steps += iters;
+  }
+
+  /**
+   * Carry the ink along the gravity field by `flow` cells: each cell takes
+   * its value from upstream, blended between the four nearest cells.
+   */
+  private advect(mode: string, flow: number): void {
+    const { w, h, cell } = this;
+    const a = this.a, b = this.b, na = this.na, nb = this.nb;
+    const uniform = isUniform(mode);
+    let [dx, dy] = uniform ? gravityAt(mode, flow, 0, 0, w, h, this.time) : [0, 0];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (!uniform) [dx, dy] = gravityAt(mode, flow, x * cell, y * cell, w * cell, h * cell, this.time, 40);
+        let sx = x - dx, sy = y - dy;
+        sx = ((sx % w) + w) % w;
+        sy = ((sy % h) + h) % h;
+        const x0 = Math.floor(sx), y0 = Math.floor(sy);
+        const fx = sx - x0, fy = sy - y0;
+        const x1 = x0 + 1 === w ? 0 : x0 + 1, y1 = y0 + 1 === h ? 0 : y0 + 1;
+        const i00 = y0 * w + x0, i10 = y0 * w + x1, i01 = y1 * w + x0, i11 = y1 * w + x1;
+        const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
+        const i = y * w + x;
+        na[i] = a[i00] * w00 + a[i10] * w10 + a[i01] * w01 + a[i11] * w11;
+        nb[i] = b[i00] * w00 + b[i10] * w10 + b[i01] * w01 + b[i11] * w11;
+      }
+    }
+    this.a = na; this.na = a;
+    this.b = nb; this.nb = b;
   }
 
   onNote(ev: NoteEvent): void {
@@ -179,8 +216,10 @@ class ReactionSim implements SimulationModel {
       : null;
   }
 
-  render(g: CanvasRenderingContext2D, _view: Viewport, p: ParamValues, m: MusicFrame): void {
+  render(g: CanvasRenderingContext2D, view: Viewport, p: ParamValues, m: MusicFrame): void {
     if (!this.raster) return;
+    applyFeedback(this.fb, g, view, p, this.stepped);
+    this.stepped = false;
     const scheme = p.palette as string;
     let lut = PALETTES[scheme];
     if (!lut) {
@@ -198,7 +237,10 @@ class ReactionSim implements SimulationModel {
       px[i] = lut[(v * 255) | 0];
     }
     const W = this.w * this.cell, H = this.h * this.cell;
+    // With afterglow the ink is laid over its own fading echoes instead of replacing them.
+    g.globalAlpha = 1 - Math.min(0.9, (p.afterglow as number) * 0.9);
     this.raster.draw(g, W, H, true);
+    g.globalAlpha = 1;
     // A soft bloom over the top that swells with the bass.
     const bloom = (p.bloom as number) * (0.25 + Math.min(1.5, m.bass) * 0.75);
     if (bloom > 0.02) {
@@ -227,10 +269,11 @@ export const reaction: ModelDefinition = {
   description: "Coral, spots and mazes that grow to the music (Gray–Scott chemistry). Loud frequencies make their column bloom, bass on the left and treble on the right; notes seed growth in their colour, kicks seed rings and flash the ink, and the palette follows the melody.",
   hint: "Drag to seed new growth. Right-drag or Shift-drag to wipe an area clean.",
   fixedDt: 1 / 60,
+  paintsBackground: true,
   params: [
-    { kind: "number", key: "spectrumGrowth", label: "Spectrum growth", min: 0, max: 2, step: 0.05, default: 0.6, group: "Music",
+    { kind: "number", key: "spectrumGrowth", label: "Spectrum growth", min: 0, max: 2, step: 0.05, default: 0.6, group: "Music", global: "energy",
       description: "How much loud frequencies make their part of the screen grow. High values paint a living spectrogram." },
-    { kind: "number", key: "bloom", label: "Bass bloom", min: 0, max: 2, step: 0.05, default: 0.7, group: "Music",
+    { kind: "number", key: "bloom", label: "Bass bloom", min: 0, max: 2, step: 0.05, default: 0.7, group: "Music", global: "size",
       description: "A soft glow over the ink that swells with the bass." },
     { kind: "number", key: "feedShift", label: "Feed shift", min: -0.02, max: 0.02, step: 0.0005, default: 0, group: "Behaviour",
       description: "Nudges how fast fresh chemical is fed in. Up floods with growth, down starves it." },
@@ -251,6 +294,10 @@ export const reaction: ModelDefinition = {
         { value: "bio", label: "Bioluminescent" },
       ],
     },
+    ...feedbackParams(0, 0, 0),
+    gravityModeParam("off", undefined, { label: "Flow direction", description: "Makes the ink flow, as if the dish were tilted. Point modes pour it toward a spot; Swirl stirs it." }),
+    { kind: "number", key: "fieldGravity", label: "Flow speed", min: 0, max: 400, step: 5, default: 60, group: "Gravity", global: "gravity",
+      description: "How fast the ink flows, pixels per second." },
     { kind: "number", key: "contrast", label: "Contrast", min: 0.4, max: 5, step: 0.05, default: 1.6, group: "Look",
       description: "How sharply the pattern's edges stand out. High values glow and saturate." },
     { kind: "number", key: "brush", label: "Brush size", min: 4, max: 150, step: 1, default: 14, group: "Brush",
@@ -272,9 +319,14 @@ export const reaction: ModelDefinition = {
       description: "Pixels per simulation cell. Smaller is sharper but slower. Restarts the pattern." },
   ],
   macros: [
-    { key: "grow", label: "Growth", targets: [{ param: "speed", amount: 0.8 }, { param: "contrast", amount: 0.2 }] },
-    { key: "bloom", label: "Bloom", targets: [{ param: "killShift", amount: -0.6 }, { param: "feedShift", amount: 0.3 }, { param: "bloom", amount: 0.4 }] },
-    { key: "dissolve", label: "Dissolve", targets: [{ param: "killShift", amount: 0.6 }, { param: "feedShift", amount: -0.3 }, { param: "diffusion", amount: -0.5 }] },
+    { key: "grow", label: "Overgrowth", description: "Floods the screen with fast, sharp, hungry growth.",
+      targets: [{ param: "speed", amount: 0.8 }, { param: "contrast", amount: 0.3 }, { param: "diffusion", amount: -0.25 }, { param: "bloom", amount: 0.3 }] },
+    { key: "bloom", label: "Bloom", description: "Blobs swell and merge under a bright bass glow with smoky echoes.",
+      targets: [{ param: "killShift", amount: -0.08 }, { param: "bloom", amount: 0.6 }, { param: "contrast", amount: -0.1 }, { param: "afterglow", amount: 0.4 }, { param: "zoom", amount: 0.15 }] },
+    { key: "dissolve", label: "Dissolve", description: "Erodes the pattern into fine, crawling dust.",
+      targets: [{ param: "killShift", amount: 0.7 }, { param: "feedShift", amount: -0.4 }, { param: "diffusion", amount: -0.6 }] },
+    { key: "stir", label: "Stir", description: "Swirls the ink into a whirlpool and spins it down a tunnel.",
+      targets: [{ param: "fieldGravity", amount: 0.6 }, { param: "afterglow", amount: 0.6 }, { param: "spin", amount: 0.3 }, { param: "zoom", amount: 0.25 }, { param: "gravityMode", set: "swirl", at: 0.15 }] },
   ],
   modulations: [
     { source: "kick", target: "speed", amount: 0.4 },

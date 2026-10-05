@@ -3,7 +3,8 @@ import { noteHue } from "../models/lib/music";
 import { renderParamControls, type ParamControls } from "../ui/controls";
 import { AudioEngine, BeatDetector, type Waveform } from "./audio";
 import { dispatchMidi, openMidi, type MidiInputs } from "./midi";
-import { applyModulation, macroSpecs, modulatable, ModSources, SOURCES, sourceLabel } from "./modulation";
+import { applyModulation, macroSpecs, modulatable, ModSources, SOURCES, sourceLabel, type NumberSpec } from "./modulation";
+import { GLOBAL_SPECS, applyGlobals, canvasFilter, defaultGlobals, sanitizeGlobals } from "./globals";
 import {
   BASS_STYLES, CHORD_SPEED_LABELS, CHORD_STYLES, DRUMS, MELODY_STYLES, ROOTS, SCALES, STEPS, STYLES,
   Sequencer, applyStyleDensities, chordName, sanitizeState, type SequencerState,
@@ -17,20 +18,22 @@ interface GlobalSettings {
   thru: boolean;
   decay: number;
   inputs: string[];
-  /** CC number -> target: `macro#<slot>` (any model) or `<modelId>/<paramKey>`. */
+  /** CC number -> target: `macro#<slot>` (any model), `glob#<key>`, `gen#<key>` or `<modelId>/<paramKey>`. */
   bindings: Record<string, string>;
   dockHidden: boolean;
   /** Master switch: when off, no routes push and no notes reach the model. */
   musicOn: boolean;
   /** Scales every route on every model, 0..2. */
   intensity: number;
+  /** Global Controls, as the user set them (see globals.ts). */
+  globals: ParamValues;
 }
 
 /**
  * Bump when models' default routes change enough that saved per-model
  * settings should be replaced by the new defaults.
  */
-const MODEL_SETTINGS_VERSION = 3;
+const MODEL_SETTINGS_VERSION = 4;
 
 interface ModelSettings {
   v: number;
@@ -162,6 +165,9 @@ export class Studio {
   private paramControls: ParamControls | null = null;
   private macroControls: ParamControls | null = null;
   private onBaseChanged: (spec: ParamSpec) => void = () => {};
+  private globalControls: ParamControls | null = null;
+  /** Global Controls after modulation routes have pushed them, as the model sees them. */
+  private globalOut: ParamValues = defaultGlobals();
 
   private learning = false;
   private learnTarget: string | null = null;
@@ -192,6 +198,7 @@ export class Studio {
       volume: 0.7, thru: true, decay: 0.25, inputs: [], bindings: {}, dockHidden: false, musicOn: true, intensity: 1,
       ...saved,
       seq,
+      globals: sanitizeGlobals(saved.globals),
     };
     this.seq = new Sequencer(this.audio, seq);
     this.audio.setVolume(this.settings.volume);
@@ -236,17 +243,29 @@ export class Studio {
 
   private renderMacros(): void {
     const macros = this.def?.macros ?? [];
-    $("macros-section").hidden = macros.length === 0;
+    $("macros-model").textContent = this.def ? `only in ${this.def.name}` : "";
     this.macroControls = renderParamControls($("macros"), macroSpecs(macros, this.def?.params ?? []), this.modelSettings.macros, () => this.saveModel(), "macro:");
+    if (macros.length === 0) $("macros").append(el("p", { className: "muted", textContent: "This model has no macros." }));
   }
 
-  /** Everything a route can push: macros first, then number parameters. */
+  /** Everything a route can push: macros first, then number parameters, then the global controls. */
   private targets(): { id: string; label: string }[] {
     if (!this.def) return [];
     return [
       ...(this.def.macros ?? []).map((m) => ({ id: `macro:${m.key}`, label: `Macro: ${m.label}` })),
       ...modulatable(this.def).map((p) => ({ id: p.key, label: p.label })),
+      ...globalNumbers().map((p) => ({ id: `global:${p.key}`, label: `Global: ${p.label}` })),
     ];
+  }
+
+  /** The global controls this frame, after modulation. */
+  globals(): ParamValues {
+    return this.globalOut;
+  }
+
+  /** The CSS filter the global colour controls put over the canvas. */
+  canvasFilter(): string {
+    return canvasFilter(this.globalOut, this.beatsNow);
   }
 
   // ---- Per-frame ---------------------------------------------------------
@@ -334,8 +353,22 @@ export class Studio {
     if (!this.def) return;
     const depth = this.settings.musicOn ? this.settings.intensity : 0;
     applyModulation(this.def, this.base, this.modelSettings.macros, this.modelSettings.routes, this.sources, out, this.macroOut, depth);
+    // Routes can push the global controls too, by a share of each one's range.
+    const g = this.globalOut, base = this.settings.globals;
+    for (const k in base) g[k] = base[k];
+    if (depth > 0) {
+      for (const r of this.modelSettings.routes) {
+        if (r.off || !r.target.startsWith("global:")) continue;
+        const spec = globalNumbers().find((p) => p.key === r.target.slice(7));
+        const src = this.sources.get(r.source);
+        if (!spec || src === 0) continue;
+        g[spec.key] = Math.min(spec.max, Math.max(spec.min, (g[spec.key] as number) + r.amount * src * depth * (spec.max - spec.min)));
+      }
+    }
+    applyGlobals(this.def, g, out);
     this.paramControls?.showModulation(out);
     this.macroControls?.showModulation(this.macroOut);
+    this.globalControls?.showModulation(g);
   }
 
   // ---- MIDI ---------------------------------------------------------------
@@ -431,6 +464,14 @@ export class Studio {
       this.setGen(binding.slice(4), v);
       return;
     }
+    if (binding.startsWith("glob#")) {
+      const spec = GLOBAL_SPECS.find((p) => p.key === binding.slice(5));
+      if (!spec) return;
+      this.settings.globals[spec.key] = knobValue(spec, v);
+      this.globalControls?.refresh();
+      this.saveGlobal();
+      return;
+    }
     if (!this.def) return;
     if (binding.startsWith("macro#")) {
       const m = this.def.macros?.[Number(binding.slice(6))];
@@ -443,14 +484,7 @@ export class Studio {
       if (modelId !== this.def.id) return;
       const spec = this.def.params.find((p) => p.key === key);
       if (!spec) return;
-      if (spec.kind === "number") {
-        const raw = spec.min + v * (spec.max - spec.min);
-        this.base[key] = Math.min(spec.max, Math.max(spec.min, Math.round(raw / spec.step) * spec.step));
-      } else if (spec.kind === "boolean") {
-        this.base[key] = v >= 0.5;
-      } else {
-        this.base[key] = spec.options[Math.min(spec.options.length - 1, Math.floor(v * spec.options.length))].value;
-      }
+      this.base[key] = knobValue(spec, v);
       if (this.base[key] === this.lastCcValue[key]) return;
       this.lastCcValue[key] = this.base[key];
       this.paramControls?.refresh();
@@ -467,13 +501,14 @@ export class Studio {
     document.body.classList.toggle("learning", on);
     document.querySelectorAll(".param.learn-target").forEach((e) => e.classList.remove("learn-target"));
     $("midi-learn-help").textContent = on
-      ? "Now click a slider or macro in the sidebar (or a sequencer control), then move a knob on your controller."
-      : "Click MIDI learn, click a slider or macro, then move a knob on your controller. Sequencer sliders can be mapped too.";
+      ? "Now click a slider in the sidebar, a macro or global control, or a sequencer control, then move a knob on your controller."
+      : "Click MIDI learn, click a slider, macro or global control, then move a knob on your controller. Sequencer sliders can be mapped too.";
   }
 
   /** Translate a sidebar row's data-target into a binding target. */
   private bindingFor(rowTarget: string): string | null {
     if (rowTarget.startsWith("gen:")) return `gen#${rowTarget.slice(4)}`;
+    if (rowTarget.startsWith("glob:")) return `glob#${rowTarget.slice(5)}`;
     if (!this.def) return null;
     if (rowTarget.startsWith("macro:")) {
       const i = (this.def.macros ?? []).findIndex((m) => m.key === rowTarget.slice(6));
@@ -486,6 +521,10 @@ export class Studio {
     if (target.startsWith("gen#")) {
       const found = findSeqSpec(target.slice(4));
       return found ? `Sequencer: ${found.part} ${found.spec.label.toLowerCase()}` : null;
+    }
+    if (target.startsWith("glob#")) {
+      const spec = GLOBAL_SPECS.find((p) => p.key === target.slice(5));
+      return spec ? `Global: ${spec.label}` : null;
     }
     if (!this.def) return null;
     if (target.startsWith("macro#")) {
@@ -505,7 +544,7 @@ export class Studio {
       .map(([cc, t]) => [cc, t, this.bindingLabel(t)] as const)
       .filter(([, , label]) => label !== null);
     if (rows.length === 0) {
-      box.append(el("p", { className: "muted", textContent: "No knobs mapped for this model yet. Macro mappings carry over to every model." }));
+      box.append(el("p", { className: "muted", textContent: "No knobs mapped for this model yet. Macro and global mappings carry over to every model." }));
       return;
     }
     for (const [cc, target, label] of rows) {
@@ -537,6 +576,19 @@ export class Studio {
 
     $<HTMLButtonElement>("seq-play").addEventListener("click", () => this.toggleSequencer());
     this.buildSequencer();
+
+    // Global controls and macros
+    this.renderGlobals();
+    $("global-reset").addEventListener("click", () => {
+      this.settings.globals = defaultGlobals();
+      this.saveGlobal();
+      this.renderGlobals();
+    });
+    $("macros-reset").addEventListener("click", () => {
+      for (const k in this.modelSettings.macros) this.modelSettings.macros[k] = 0;
+      this.macroControls?.refresh();
+      this.saveModel();
+    });
 
     // Modulation
     $("mod-add").addEventListener("click", () => {
@@ -602,6 +654,8 @@ export class Studio {
     };
     $("sidebar").addEventListener("pointerdown", pickTarget);
     document.querySelector<HTMLElement>('#dock-body .tab[data-tab="sequencer"]')?.addEventListener("pointerdown", pickTarget);
+    $("global-controls").addEventListener("pointerdown", pickTarget);
+    $("macros").addEventListener("pointerdown", pickTarget);
 
     // Audio file
     const file = $<HTMLInputElement>("audio-file");
@@ -628,6 +682,16 @@ export class Studio {
       meters.append(el("div", { className: "meter" }, el("span", { textContent: sourceLabel(k) }), el("div", { className: "meter-track" }, bar)));
       this.meterBars[k] = bar;
     }
+  }
+
+  private renderGlobals(): void {
+    const box = $("global-controls");
+    this.globalControls = renderParamControls(box, GLOBAL_SPECS, this.settings.globals, () => this.saveGlobal(), "glob:");
+    // The panel is short, so descriptions show as tooltips here instead of under each control.
+    for (const row of box.querySelectorAll<HTMLElement>(".param[data-target]")) {
+      row.title = GLOBAL_SPECS.find((p) => `glob:${p.key}` === row.dataset.target)?.description ?? "";
+    }
+    this.showRouteBadges();
   }
 
   private setDockHidden(hidden: boolean): void {
@@ -1084,16 +1148,35 @@ export class Studio {
   private showRouteBadges(): void {
     const params: Record<string, string[]> = {};
     const macros: Record<string, string[]> = {};
+    const globals: Record<string, string[]> = {};
     for (const r of this.modelSettings.routes) {
       if (r.off || r.amount === 0) continue;
       const text = `${sourceLabel(r.source)} ${formatAmount(r.amount)}`;
-      const [bucket, key] = r.target.startsWith("macro:") ? [macros, r.target.slice(6)] : [params, r.target];
+      const [bucket, key] = r.target.startsWith("macro:") ? [macros, r.target.slice(6)]
+        : r.target.startsWith("global:") ? [globals, r.target.slice(7)]
+        : [params, r.target];
       (bucket[key] ??= []).push(text);
     }
     const join = (m: Record<string, string[]>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v.join(", ")]));
     this.paramControls?.showRoutes(join(params));
     this.macroControls?.showRoutes(join(macros));
+    this.globalControls?.showRoutes(join(globals));
   }
+}
+
+/** The global controls a route can push. */
+function globalNumbers(): NumberSpec[] {
+  return GLOBAL_SPECS.filter((p): p is NumberSpec => p.kind === "number");
+}
+
+/** A control's value for a 0..1 knob position (MIDI CC): numbers snap to their step, dropdowns pick by slice. */
+function knobValue(spec: ParamSpec, v: number): number | boolean | string {
+  if (spec.kind === "number") {
+    const raw = spec.min + v * (spec.max - spec.min);
+    return Math.min(spec.max, Math.max(spec.min, Math.round(raw / spec.step) * spec.step));
+  }
+  if (spec.kind === "boolean") return v >= 0.5;
+  return spec.options[Math.min(spec.options.length - 1, Math.floor(v * spec.options.length))].value;
 }
 
 function formatAmount(v: number): string {

@@ -21,7 +21,17 @@ interface ParamCommon {
   group?: string;
   /** Re-run `reset` when this parameter changes (e.g. particle count). */
   resetOnChange?: boolean;
+  /**
+   * Which Global Control scales this number parameter, so one global knob
+   * moves the matching slider in every model: "gravity" for gravity-field
+   * strength, "energy" for how wild things move, "size" for glow and line
+   * sizes. Parameters keyed `gravityMode`, `colours`, `afterglow`, `zoom`
+   * and `spin` are picked up by key without a tag.
+   */
+  global?: GlobalTag;
 }
+
+export type GlobalTag = "gravity" | "energy" | "size";
 
 export type ParamSpec = ParamCommon &
   (
@@ -99,14 +109,22 @@ export interface NoteEvent {
 
 /**
  * A macro is one 0..1 knob that pushes several parameters at once. At 0 the
- * parameters keep their slider values; at 1 each moves by `amount` times its
- * full range (negative amounts move it down).
+ * parameters keep their slider values; at 1 each number moves by `amount`
+ * times its full range (negative amounts move it down). A target with `set`
+ * instead switches a dropdown or checkbox to that value once the knob passes
+ * `at`, so one turn can flip the whole look.
  */
 export interface MacroSpec {
   key: string;
   label: string;
-  targets: { param: string; amount: number }[];
+  /** One short line on what it does, shown under the knob. */
+  description?: string;
+  targets: MacroTarget[];
 }
+
+export type MacroTarget =
+  | { param: string; amount: number }
+  | { param: string; set: string | boolean; at: number };
 
 /**
  * A modulation route: a music source (see src/music/modulation.ts for the

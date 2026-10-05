@@ -119,12 +119,13 @@ export function modulatable(def: ModelDefinition): NumberSpec[] {
   return def.params.filter((p): p is NumberSpec => p.kind === "number" && !p.resetOnChange);
 }
 
-/** Macros as slider specs, so the same control code can draw them. The description lists what each one pushes. */
+/** Macros as slider specs, so the same control code can draw them. Without a description, it lists what each one pushes. */
 export function macroSpecs(macros: MacroSpec[], params: ParamSpec[]): NumberSpec[] {
+  const label = (key: string) => params.find((p) => p.key === key)?.label ?? key;
   return macros.map((m) => ({
     kind: "number", key: m.key, label: m.label, min: 0, max: 1, step: 0.01, default: 0,
-    description: m.targets
-      .map((t) => `${params.find((p) => p.key === t.param)?.label ?? t.param} ${t.amount >= 0 ? "up" : "down"}`)
+    description: m.description ?? m.targets
+      .map((t) => ("set" in t ? `${label(t.param)} switches` : `${label(t.param)} ${t.amount >= 0 ? "up" : "down"}`))
       .join(", "),
   }));
 }
@@ -161,10 +162,22 @@ export function applyModulation(
       offsets[r.target] = (offsets[r.target] ?? 0) + push;
     }
   }
+  // Dropdowns and checkboxes a macro has turned far enough to switch.
+  const switched: ParamValues = {};
   for (const m of macros) {
     const v = (macroOut[m.key] = Math.min(1, Math.max(0, macroOut[m.key])));
     if (v === 0) continue;
-    for (const t of m.targets) offsets[t.param] = (offsets[t.param] ?? 0) + t.amount * v;
+    for (const t of m.targets) {
+      if ("set" in t) {
+        if (v >= t.at) switched[t.param] = t.set;
+      } else {
+        offsets[t.param] = (offsets[t.param] ?? 0) + t.amount * v;
+      }
+    }
+  }
+  for (const key in switched) {
+    const spec = def.params.find((p) => p.key === key);
+    if (spec && spec.kind !== "number" && !spec.resetOnChange) out[key] = switched[key];
   }
 
   for (const key in offsets) {

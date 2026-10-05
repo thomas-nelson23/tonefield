@@ -243,3 +243,30 @@ body.learning #dock .param.learn-target { outline: 1px solid #d2a8ff; }
 .meter { display: grid; grid-template-columns: 90px 1fr; align-items: center; color: var(--muted); }
 .meter-track { height: 8px; border-radius: 4px; background: var(--button); overflow: hidden; }
 .meter-fill { height: 100%; width: 0; background: linear-gradient(90deg, #58a6ff, #d2a8ff); }
+
+/* ---- Global controls and macros ---- */
+
+.label-note { text-transform: none; letter-spacing: 0; }
+.global-layout { display: grid; grid-template-columns: 1fr minmax(260px, 360px); gap: 24px; }
+/*
+ * Five columns so every group fits the panel without scrolling:
+ * Color (two columns, both rows) | Gravity over Speed | Motion (two columns) over Size.
+ */
+#global-controls {
+  display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 0 18px; align-items: start;
+}
+#global-controls > .param-group:nth-child(1) { grid-column: 1 / span 2; grid-row: 1 / span 2; }
+#global-controls > .param-group:nth-child(2) { grid-column: 3; grid-row: 1; }
+#global-controls > .param-group:nth-child(3) { grid-column: 3; grid-row: 2; }
+#global-controls > .param-group:nth-child(4) { grid-column: 4 / span 2; grid-row: 1; }
+#global-controls > .param-group:nth-child(5) { grid-column: 4; grid-row: 2; }
+#global-controls > .param-group:nth-child(1) > div,
+#global-controls > .param-group:nth-child(4) > div { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; }
+#global-controls .param { margin-bottom: 8px; }
+#global-controls .param-help { display: none; }
+#global-controls .param select { padding: 3px 6px; }
+.global-macros { border-left: 1px solid var(--panel-border); padding-left: 20px; }
+#macros { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; }
+#macros > .muted { grid-column: 1 / -1; margin: 0; }
+#macros .param { margin-bottom: 6px; }
+#macros .param label { font-weight: 600; }

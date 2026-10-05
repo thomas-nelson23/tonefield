@@ -1,7 +1,7 @@
 import type { ModelDefinition, MusicFrame, NoteEvent, ParamValues, PointerInput, SimulationModel, Viewport } from "./types";
 import { noteHue } from "./lib/music";
 import { gravityAt, gravityModeParam } from "./lib/gravity";
-import { Feedback, applyFeedback, feedbackParams, glowSprite } from "./lib/visual";
+import { Feedback, applyFeedback, colourParam, feedbackParams, glowSprite, schemeHue } from "./lib/visual";
 
 interface Body {
   x: number;
@@ -322,6 +322,9 @@ class OrbitsSim implements SimulationModel {
     const star0 = this.bodies.find((b) => b.star);
     const spec = m.spectrum;
     const bright = 0.35 + Math.min(1, m.level) * 0.4;
+    // Each planet keeps its note's colour, unless another scheme is picked.
+    const scheme = p.colours as string;
+    const hueOf = (b: Body) => (scheme === "notes" ? b.hue : schemeHue(scheme, b.hue / 360, m.hue, m.beats));
 
     // Trails fade from transparent (oldest) to solid (newest) in a few bands.
     const bands = 4;
@@ -338,7 +341,7 @@ class OrbitsSim implements SimulationModel {
           if (i === from) g.moveTo(b.trail[idx], b.trail[idx + 1]);
           else g.lineTo(b.trail[idx], b.trail[idx + 1]);
         }
-        g.strokeStyle = `hsla(${b.hue} 85% ${60 + lift * 25}% / ${((k + 1) / bands) * (bright + lift * 0.5)})`;
+        g.strokeStyle = `hsla(${hueOf(b)} 85% ${60 + lift * 25}% / ${((k + 1) / bands) * (bright + lift * 0.5)})`;
         g.stroke();
       }
     }
@@ -383,7 +386,7 @@ class OrbitsSim implements SimulationModel {
       }
       const s = b.r * (2.2 + level * 3 + b.glow * 5) * (p.planetGlow as number);
       g.globalAlpha = Math.min(1, 0.55 + level * 0.5 + b.glow);
-      g.drawImage(glowSprite(b.hue), b.x - s, b.y - s, s * 2, s * 2);
+      g.drawImage(glowSprite(hueOf(b)), b.x - s, b.y - s, s * 2, s * 2);
       g.globalAlpha = 1;
     }
     g.globalCompositeOperation = "source-over";
@@ -450,7 +453,7 @@ export const orbits: ModelDefinition = {
   paintsBackground: true,
   params: [
     {
-      kind: "number", key: "timeScale", label: "Time scale", min: 0.05, max: 6, step: 0.05, default: 1, group: "Motion",
+      kind: "number", key: "timeScale", label: "Time scale", min: 0.05, max: 6, step: 0.05, default: 1, group: "Motion", global: "energy",
       description: "How fast the planets go round. High values whip them into spirograph blurs.",
     },
     {
@@ -461,7 +464,7 @@ export const orbits: ModelDefinition = {
       description: "Drags whole systems around: stars and their planets move together, cushioned at the edges.",
     }),
     {
-      kind: "number", key: "fieldGravity", label: "Field strength", min: 0, max: 600, step: 5, default: 120, group: "Gravity",
+      kind: "number", key: "fieldGravity", label: "Field strength", min: 0, max: 600, step: 5, default: 120, group: "Gravity", global: "gravity",
       description: "How hard the outside field drags the systems. Strong fields sling stars across the screen.",
     },
     {
@@ -469,13 +472,14 @@ export const orbits: ModelDefinition = {
       description: "How long a glowing tail each planet leaves. Long trails draw whole rings.",
     },
     {
-      kind: "number", key: "trailWidth", label: "Trail width", min: 0.5, max: 8, step: 0.1, default: 1.4, group: "Look",
+      kind: "number", key: "trailWidth", label: "Trail width", min: 0.5, max: 8, step: 0.1, default: 1.4, group: "Look", global: "size",
       description: "How thick the trails are. Thick trails overlap into bands of light.",
     },
     {
-      kind: "number", key: "planetGlow", label: "Planet glow", min: 0.3, max: 4, step: 0.05, default: 1, group: "Look",
+      kind: "number", key: "planetGlow", label: "Planet glow", min: 0.3, max: 4, step: 0.05, default: 1, group: "Look", global: "size",
       description: "How big each planet's glow is.",
     },
+    colourParam("notes"),
     ...feedbackParams(0.6, 0, 0),
     {
       kind: "choice", key: "system", label: "System", default: "planets", resetOnChange: true, group: "Setup",
@@ -496,9 +500,14 @@ export const orbits: ModelDefinition = {
     },
   ],
   macros: [
-    { key: "warp", label: "Time warp", targets: [{ param: "timeScale", amount: 0.6 }, { param: "trail", amount: 0.2 }, { param: "zoom", amount: 0.2 }] },
-    { key: "nebula", label: "Nebula", targets: [{ param: "afterglow", amount: 0.35 }, { param: "trailWidth", amount: 0.4 }, { param: "planetGlow", amount: 0.3 }, { param: "spin", amount: 0.1 }] },
-    { key: "trails", label: "Long trails", targets: [{ param: "trail", amount: 0.9 }, { param: "timeScale", amount: 0.1 }] },
+    { key: "warp", label: "Time warp", description: "Fast-forwards the system into whirling rings and dives through them.",
+      targets: [{ param: "timeScale", amount: 0.7 }, { param: "trail", amount: 0.4 }, { param: "zoom", amount: 0.6 }, { param: "spin", amount: 0.2 }] },
+    { key: "nebula", label: "Nebula", description: "Thick glowing trails smear into a turning cloud of gas.",
+      targets: [{ param: "afterglow", amount: 0.4 }, { param: "trailWidth", amount: 0.6 }, { param: "planetGlow", amount: 0.6 }, { param: "spin", amount: 0.35 }] },
+    { key: "chaos", label: "Chaos", description: "Planets pull on each other and a swirling field flings whole systems around.",
+      targets: [{ param: "fieldGravity", amount: 0.35 }, { param: "timeScale", amount: 0.2 }, { param: "trail", amount: 0.3 }, { param: "mutual", set: true, at: 0.3 }, { param: "gravityMode", set: "swirl", at: 0.5 }] },
+    { key: "spiro", label: "Spirograph", description: "Full-length rainbow trails trace every orbit into a spirograph.",
+      targets: [{ param: "trail", amount: 1 }, { param: "timeScale", amount: 0.5 }, { param: "afterglow", amount: -0.4 }, { param: "colours", set: "rainbow", at: 0.5 }] },
   ],
   modulations: [
     { source: "kick", target: "timeScale", amount: 0.2 },
