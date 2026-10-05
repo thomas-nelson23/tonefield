@@ -115,7 +115,7 @@ The AppImage is built on Ubuntu and bundles its own libraries, so the pacman pac
 
 ### Troubleshooting
 
-- **Blank or white window, or a crash on start (common with NVIDIA drivers):** run with `WEBKIT_DISABLE_DMABUF_RENDERER=1 physics-playground`. To make it stick, add `export WEBKIT_DISABLE_DMABUF_RENDERER=1` to your shell profile.
+- **Blank or white window, or a crash on start (common with NVIDIA drivers):** the app now sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself on Linux, so this should not happen. If you need the DMA-BUF renderer back, launch with `WEBKIT_DISABLE_DMABUF_RENDERER=0 physics-playground`.
 
 ## Adding a model
 
