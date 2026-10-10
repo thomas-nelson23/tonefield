@@ -33,7 +33,7 @@ interface GlobalSettings {
  * Bump when models' default routes change enough that saved per-model
  * settings should be replaced by the new defaults.
  */
-const MODEL_SETTINGS_VERSION = 4;
+const MODEL_SETTINGS_VERSION = 5;
 
 interface ModelSettings {
   v: number;

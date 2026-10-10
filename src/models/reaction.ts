@@ -7,6 +7,12 @@ import { gravityAt, gravityModeParam, isUniform } from "./lib/gravity";
 /** Milliseconds per frame the reaction may spend iterating; see `step`. */
 const ITERATION_BUDGET_MS = 7;
 
+/** Most pixels the ink is coloured at before the canvas stretches it; see `render`. */
+const RENDER_PIXEL_BUDGET = 1_600_000;
+
+/** How far fully fed brush strokes lower the kill rate, enough to keep a drawn line alive. */
+const HOLD_KILL = 0.007;
+
 /** Feed and kill rates for well-known Gray–Scott regimes. */
 const PRESETS: Record<string, [number, number]> = {
   coral: [0.0545, 0.062],
@@ -48,6 +54,20 @@ class ReactionSim implements SimulationModel {
   private kill = new Float32Array(0);
   private raster: Raster | null = null;
   private brush: { x: number; y: number; erase: boolean } | null = null;
+  /** Where the last brush stamp landed, in cells, so fast strokes are joined up. */
+  private lastStamp: { x: number; y: number } | null = null;
+  /**
+   * How strongly each cell is still fed by a brush stroke, 0..1. Fed cells
+   * have a lower kill rate, so lines drawn to join shapes stay joined instead
+   * of pinching off; the feeding fades over the Brush hold time.
+   */
+  private hold = new Float32Array(0);
+  private holdLeft = 0;
+  /** Base kill rate minus brush feeding, rebuilt each step. */
+  private killNow = new Float32Array(0);
+  private shade = new Float32Array(0);
+  /** `shade` stretched along its rows, the first half of the upscale in `render`. */
+  private wide = new Float32Array(0);
   private steps = 0;
   private colShift = new Float32Array(0);
   private hue = 200;
@@ -72,7 +92,11 @@ class ReactionSim implements SimulationModel {
     this.nb = new Float32Array(n);
     this.feed = new Float32Array(n);
     this.kill = new Float32Array(n);
-    this.raster = new Raster(this.w, this.h);
+    this.killNow = new Float32Array(n);
+    this.hold = new Float32Array(n);
+    this.holdLeft = 0;
+    this.shade = new Float32Array(n);
+    this.raster = null;
     this.steps = 0;
     this.applyPattern(p.pattern as string);
     // Seed a scattering of chemical-B blobs to get things started.
@@ -100,16 +124,32 @@ class ReactionSim implements SimulationModel {
     }
   }
 
-  private paint(cx: number, cy: number, r: number, erase: boolean): void {
+  /** Seed (or wipe) a disc of cells. `feed` also marks it as held by the brush. */
+  private paint(cx: number, cy: number, r: number, erase: boolean, feed = false): void {
     const { w, h } = this;
     for (let y = Math.floor(cy - r); y <= cy + r; y++) {
       for (let x = Math.floor(cx - r); x <= cx + r; x++) {
         if ((x - cx) ** 2 + (y - cy) ** 2 > r * r) continue;
         const i = ((y + h) % h) * w + ((x + w) % w);
-        if (erase) { this.a[i] = 1; this.b[i] = 0; }
-        else { this.a[i] = 0.5; this.b[i] = 0.25 + Math.random() * 0.05; }
+        if (erase) { this.a[i] = 1; this.b[i] = 0; this.hold[i] = 0; }
+        else {
+          this.a[i] = 0.5; this.b[i] = 0.25 + Math.random() * 0.05;
+          if (feed) this.hold[i] = 1;
+        }
       }
     }
+    if (feed && !erase) this.holdLeft = 1;
+  }
+
+  /** Paint along the stroke from the last stamp, so a fast drag leaves an unbroken line. */
+  private stroke(x: number, y: number, r: number, erase: boolean): void {
+    const from = this.lastStamp ?? { x, y };
+    const steps = Math.max(1, Math.ceil(Math.hypot(x - from.x, y - from.y) / Math.max(0.5, r * 0.5)));
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      this.paint(from.x + (x - from.x) * t, from.y + (y - from.y) * t, r, erase, true);
+    }
+    this.lastStamp = { x, y };
   }
 
   step(dt: number, p: ParamValues, m: MusicFrame): void {
@@ -120,13 +160,17 @@ class ReactionSim implements SimulationModel {
     for (let x = 0; x < this.w; x++) this.colShift[x] = -spec[Math.min(spec.length - 1, Math.floor((x / this.w) * spec.length))] * grow;
     this.flash = Math.max(this.flash * Math.exp(-dt * 5), m.kick * 0.5);
     this.hue = hueToward(this.hue, m.hue, dt * 1.5);
-    if (this.brush) this.paint(this.brush.x / this.cell, this.brush.y / this.cell, (p.brush as number) / this.cell, this.brush.erase);
+    if (this.brush) this.stroke(this.brush.x / this.cell, this.brush.y / this.cell, (p.brush as number) / this.cell, this.brush.erase);
+    else this.lastStamp = null;
+    this.updateHold(dt, p.brushHold as number);
     this.stepped = true;
     this.time += dt;
     const flow = ((p.fieldGravity as number) * dt) / this.cell;
     if (p.gravityMode !== "off" && flow > 0) this.advect(p.gravityMode as string, flow);
+    this.brushCells = (p.brush as number) / this.cell;
     const iters = p.speed as number;
-    const { w, h, feed, kill } = this;
+    const { w, h, feed } = this;
+    const kill = this.holdLeft > 0 ? this.killNow : this.kill;
     const df = (p.feedShift as number) || 0;
     const dk = (p.killShift as number) || 0;
     // Explicit Euler with this 9-point stencil is stable for diffusion up to
@@ -175,6 +219,22 @@ class ReactionSim implements SimulationModel {
     }
     this.steps += done;
     this.spent += performance.now() - start;
+  }
+
+  /** Fade the brush feeding and fold it into this step's kill rates. */
+  private updateHold(dt: number, seconds: number): void {
+    if (this.holdLeft <= 0) return;
+    const { hold, kill, killNow } = this;
+    // The top of the slider keeps strokes fed for good.
+    const fade = seconds >= 120 ? 1 : seconds <= 0 ? 0 : Math.exp(-dt / (seconds / 3));
+    let any = 0;
+    for (let i = 0; i < hold.length; i++) {
+      const v = hold[i] * fade;
+      hold[i] = v < 0.01 ? 0 : v;
+      killNow[i] = kill[i] - hold[i] * HOLD_KILL;
+      any = any > v ? any : v;
+    }
+    this.holdLeft = any;
   }
 
   /**
@@ -237,14 +297,23 @@ class ReactionSim implements SimulationModel {
   }
 
   onPointer(input: PointerInput): void {
-    this.brush = input.pressed && input.type !== "up"
-      ? { x: input.x, y: input.y, erase: input.button === 2 || input.shift }
-      : null;
+    const erase = input.button === 2 || input.shift;
+    if (input.pressed && input.type !== "up") {
+      // Every pointer move is stamped right away (joined to the last one), so
+      // nothing between simulation steps is lost.
+      if (this.brush && this.brush.erase === erase) this.stroke(input.x / this.cell, input.y / this.cell, this.brushCells, erase);
+      else this.lastStamp = null;
+      this.brush = { x: input.x, y: input.y, erase };
+    } else {
+      this.brush = null;
+      this.lastStamp = null;
+    }
   }
+  private brushCells = 3;
 
   render(g: CanvasRenderingContext2D, view: Viewport, p: ParamValues, m: MusicFrame): void {
     this.spent = 0;
-    if (!this.raster) return;
+    if (this.shade.length === 0) return;
     applyFeedback(this.fb, g, view, p, this.stepped);
     this.stepped = false;
     const scheme = p.palette as string;
@@ -255,25 +324,58 @@ class ReactionSim implements SimulationModel {
       if (Math.abs(((h - this.lutHue + 540) % 360) - 180) > 2) { this.lut = huePalette(h); this.lutHue = h; }
       lut = this.lut;
     }
-    const px = this.raster.pixels, { a, b } = this;
+    const { a, b, w, h, shade } = this;
     // Contrast stretches the a-b difference around the same midpoint as before; kicks flash it brighter.
     const c = (p.contrast as number) || 1.6;
     const off = 0.5 + (1.25 - 0.5) * (c / 1.6) + this.flash * 0.25;
-    for (let i = 0; i < px.length; i++) {
-      const v = Math.max(0, Math.min(1, (a[i] - b[i]) * -c + off));
-      px[i] = lut[(v * 255) | 0];
+    for (let i = 0; i < shade.length; i++) {
+      const v = (a[i] - b[i]) * -c + off;
+      shade[i] = v < 0 ? 0 : v > 1 ? 255 : v * 255;
+    }
+    // The chemicals are smoothed up to (nearly) screen resolution before they
+    // are coloured, so pattern edges come out crisp. Colouring the grid and
+    // letting the canvas stretch the colours is what made the ink look blurry.
+    const dpr = g.getTransform().a || 1;
+    const up = p.sharp === false ? 1 : Math.max(1, Math.min(Math.round(this.cell * dpr), Math.floor(Math.sqrt(RENDER_PIXEL_BUDGET / (w * h)))));
+    const RW = w * up, RH = h * up;
+    if (!this.raster || this.raster.width !== RW || this.raster.height !== RH) this.raster = new Raster(RW, RH);
+    const px = this.raster.pixels;
+    if (up === 1) {
+      for (let i = 0; i < shade.length; i++) px[i] = lut[shade[i] | 0];
+    } else {
+      // Bilinear between cell centres, wrapping round the edges like the
+      // simulation does: first along each grid row, then between rows.
+      if (this.wide.length !== RW * h) this.wide = new Float32Array(RW * h);
+      const wide = this.wide;
+      for (let X = 0; X < RW; X++) {
+        const gx = (X + 0.5) / up - 0.5, x0 = Math.floor(gx), t = gx - x0;
+        const i0 = (x0 + w) % w, i1 = (x0 + 1) % w;
+        for (let y = 0, o = X; y < h; y++, o += RW) {
+          const s0 = shade[y * w + i0];
+          wide[o] = s0 + (shade[y * w + i1] - s0) * t;
+        }
+      }
+      let o = 0;
+      for (let Y = 0; Y < RH; Y++) {
+        const gy = (Y + 0.5) / up - 0.5, y0 = Math.floor(gy), t = gy - y0;
+        const r0 = ((y0 + h) % h) * RW, r1 = ((y0 + 1) % h) * RW;
+        for (let X = 0; X < RW; X++) {
+          const top = wide[r0 + X];
+          px[o++] = lut[(top + (wide[r1 + X] - top) * t) | 0];
+        }
+      }
     }
     const W = this.w * this.cell, H = this.h * this.cell;
     // A soft bloom over the top that swells with the bass. It is layered onto the ink at grid
-    // resolution, so the screen gets one stretched image instead of two full-screen blends.
+    // render resolution, so the screen gets one stretched image instead of two full-screen blends.
     const ink = this.raster.update();
     let image = ink;
     const bloom = (p.bloom as number) * (0.25 + Math.min(1.5, m.bass) * 0.75);
     if (bloom > 0.02) {
-      if (!this.bloomLayer || this.bloomLayer.width !== this.w || this.bloomLayer.height !== this.h) {
+      if (!this.bloomLayer || this.bloomLayer.width !== RW || this.bloomLayer.height !== RH) {
         this.bloomLayer = document.createElement("canvas");
-        this.bloomLayer.width = this.w;
-        this.bloomLayer.height = this.h;
+        this.bloomLayer.width = RW;
+        this.bloomLayer.height = RH;
       }
       const bg = this.bloomLayer.getContext("2d")!;
       const s = 1.04 + Math.min(1.5, m.bass) * 0.04;
@@ -284,7 +386,7 @@ class ReactionSim implements SimulationModel {
       bg.globalCompositeOperation = "lighter";
       bg.globalAlpha = Math.min(1, bloom * 0.22);
       bg.imageSmoothingEnabled = true;
-      bg.setTransform(s, 0, 0, s, (this.w * (1 - s)) / 2, (this.h * (1 - s)) / 2);
+      bg.setTransform(s, 0, 0, s, (RW * (1 - s)) / 2, (RH * (1 - s)) / 2);
       bg.drawImage(ink, 0, 0);
       image = this.bloomLayer;
     }
@@ -336,10 +438,14 @@ export const reaction: ModelDefinition = {
     gravityModeParam("off", undefined, { label: "Flow direction", description: "Makes the ink flow, as if the dish were tilted. Point modes pour it toward a spot; Swirl stirs it." }),
     { kind: "number", key: "fieldGravity", label: "Flow speed", min: 0, max: 400, step: 5, default: 60, group: "Gravity", global: "gravity",
       description: "How fast the ink flows, pixels per second." },
+    { kind: "boolean", key: "sharp", label: "Sharp edges", default: true, group: "Look",
+      description: "Smooths the chemistry up to screen resolution before colouring it, so edges are crisp instead of blurry. Turn off for a few more frames per second on very big screens." },
     { kind: "number", key: "contrast", label: "Contrast", min: 0.4, max: 5, step: 0.05, default: 1.6, group: "Look",
       description: "How sharply the pattern's edges stand out. High values glow and saturate." },
     { kind: "number", key: "brush", label: "Brush size", min: 4, max: 150, step: 1, default: 14, group: "Brush",
       description: "Size of the area you seed or wipe when dragging." },
+    { kind: "number", key: "brushHold", label: "Brush hold", min: 0, max: 120, step: 1, default: 40, group: "Brush",
+      description: "How many seconds what you draw keeps being fed, so lines you draw to join shapes stay joined. All the way up keeps them fed for good; zero lets the chemistry take them over at once." },
     {
       kind: "choice", key: "pattern", label: "Pattern", default: "coral", resetOnChange: true, group: "Setup",
       description: "Which feed and kill rates to start from. Each grows a different family of shapes.",

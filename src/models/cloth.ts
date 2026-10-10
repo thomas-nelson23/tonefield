@@ -6,6 +6,8 @@ import { Feedback, applyFeedback, colourParam, feedbackParams, schemeHue } from 
 /** The fabric is drawn in this many hues times this many shades, one path each, to keep fills cheap. */
 const HUES = 18;
 const SHADES = 8;
+/** Most quads Smoothing may draw in a frame. */
+const MAX_QUADS = 20000;
 
 /** How each side of the fabric can be held. */
 const ANCHOR_OPTIONS = [
@@ -55,6 +57,7 @@ class ClothSim implements SimulationModel {
   private dyeHue = new Float32Array(0);
   private dye = new Float32Array(0);
   private healClock = 0;
+  private tornList: number[] = [];
   private fb = new Feedback();
   private stepped = false;
 
@@ -181,7 +184,10 @@ class ClothSim implements SimulationModel {
       y[k] += vy + (gy + ly * up) * dt2;
     }
 
-    const iters = p.stiffness as number;
+    // Finer fabric needs more passes for a pull to travel the same distance.
+    // Scaling by the square root keeps high resolutions from going limp
+    // without the full (linear) cost.
+    const iters = Math.round((p.stiffness as number) * Math.sqrt(Math.max(1, this.cols / 48)));
     const tear = p.tearable ? (p.tearLimit as number) * this.rest : Infinity;
     const { ca, cb, alive, rest } = this;
     for (let it = 0; it < iters; it++) {
@@ -219,14 +225,22 @@ class ClothSim implements SimulationModel {
   private heal(dt: number, rate: number): void {
     if (rate <= 0 || this.torn === 0) return;
     this.healClock += dt * rate * 40;
-    const { x, y, ca, cb, alive, rest } = this;
     let budget = Math.floor(this.healClock);
+    if (budget === 0) return;
     this.healClock -= budget;
-    for (let tries = 0; budget > 0 && tries < 400; tries++) {
-      const c = Math.floor(Math.random() * ca.length);
-      if (alive[c]) continue;
+    const { x, y, ca, cb, alive, rest } = this;
+    // Pick from the torn links themselves, so even a handful of tears among
+    // thousands of links heals at the full rate.
+    const torn = this.tornList;
+    torn.length = 0;
+    for (let c = 0; c < ca.length; c++) if (!alive[c]) torn.push(c);
+    this.torn = torn.length;
+    for (let left = torn.length; budget > 0 && left > 0; left--) {
+      const pick = Math.floor(Math.random() * left);
+      const c = torn[pick];
+      torn[pick] = torn[left - 1];
       const d = Math.hypot(x[cb[c]] - x[ca[c]], y[cb[c]] - y[ca[c]]);
-      if (d > rest * 1.6) continue;
+      if (d > rest * 2) continue;
       alive[c] = 1;
       this.torn--;
       budget--;
@@ -249,7 +263,7 @@ class ClothSim implements SimulationModel {
     if (ev.role === "kick") {
       // A gust that alternates direction on each kick.
       this.gustSide = -this.gustSide;
-      const s = 4 * ev.velocity * this.gustSide * punch;
+      const s = 2.5 * ev.velocity * this.gustSide * punch;
       this.impulse((_x, y) => [s * (0.6 + 0.4 * Math.sin(y * 0.03)), -ev.velocity * punch]);
     } else if (ev.role === "snare") {
       this.impulse(() => [(Math.random() - 0.5) * 2.5 * ev.velocity * punch, (Math.random() - 0.5) * 2.5 * ev.velocity * punch]);
@@ -322,6 +336,77 @@ class ClothSim implements SimulationModel {
     }
   }
 
+  private styles: string[] = new Array(HUES * SHADES).fill("");
+  private smoothX = new Float64Array(0);
+  private smoothY = new Float64Array(0);
+  private rowX = new Float64Array(0);
+  private rowY = new Float64Array(0);
+
+  /**
+   * The fabric resampled D times finer with Catmull–Rom curves: first along
+   * each row, then down each column of the result. A torn link stops the
+   * curve bending across the tear (the missing neighbour is mirrored instead).
+   */
+  private smoothGrid(D: number): [Float64Array, Float64Array] {
+    const { x, y, cols, rows, hLink, vLink, alive } = this;
+    const SW = (cols - 1) * D + 1, SH = (rows - 1) * D + 1;
+    if (this.smoothX.length !== SW * SH) {
+      this.smoothX = new Float64Array(SW * SH);
+      this.smoothY = new Float64Array(SW * SH);
+    }
+    if (this.rowX.length !== SW * rows) {
+      this.rowX = new Float64Array(SW * rows);
+      this.rowY = new Float64Array(SW * rows);
+    }
+    const w = new Float64Array(D * 4);
+    for (let t = 0; t < D; t++) {
+      const s = t / D, s2 = s * s, s3 = s2 * s;
+      w[t * 4] = 0.5 * (-s + 2 * s2 - s3);
+      w[t * 4 + 1] = 0.5 * (2 - 5 * s2 + 3 * s3);
+      w[t * 4 + 2] = 0.5 * (s + 4 * s2 - 3 * s3);
+      w[t * 4 + 3] = 0.5 * (-s2 + s3);
+    }
+    const { rowX, rowY, smoothX, smoothY } = this;
+    // Along rows: points k-1, k, k+1, k+2 give the curve from k to k+1.
+    for (let j = 0; j < rows; j++) {
+      const base = j * cols, out = j * SW;
+      for (let i = 0; i < cols - 1; i++) {
+        const k = base + i;
+        const x1 = x[k], y1 = y[k], x2 = x[k + 1], y2 = y[k + 1];
+        const hasPrev = i > 0 && alive[hLink[k - 1]] === 1, hasNext = i < cols - 2 && alive[hLink[k + 1]] === 1;
+        const x0 = hasPrev ? x[k - 1] : 2 * x1 - x2, y0 = hasPrev ? y[k - 1] : 2 * y1 - y2;
+        const x3 = hasNext ? x[k + 2] : 2 * x2 - x1, y3 = hasNext ? y[k + 2] : 2 * y2 - y1;
+        for (let t = 0; t < D; t++) {
+          const o = t * 4;
+          rowX[out + i * D + t] = w[o] * x0 + w[o + 1] * x1 + w[o + 2] * x2 + w[o + 3] * x3;
+          rowY[out + i * D + t] = w[o] * y0 + w[o + 1] * y1 + w[o + 2] * y2 + w[o + 3] * y3;
+        }
+      }
+      rowX[out + SW - 1] = x[base + cols - 1];
+      rowY[out + SW - 1] = y[base + cols - 1];
+    }
+    // Down columns of the row-smoothed points; tears are judged by the nearest real column.
+    for (let c = 0; c < SW; c++) {
+      const col = Math.min(cols - 1, Math.round(c / D));
+      for (let j = 0; j < rows - 1; j++) {
+        const r1 = j * SW + c, r2 = r1 + SW;
+        const x1 = rowX[r1], y1 = rowY[r1], x2 = rowX[r2], y2 = rowY[r2];
+        const hasPrev = j > 0 && alive[vLink[(j - 1) * cols + col]] === 1;
+        const hasNext = j < rows - 2 && alive[vLink[(j + 1) * cols + col]] === 1;
+        const x0 = hasPrev ? rowX[r1 - SW] : 2 * x1 - x2, y0 = hasPrev ? rowY[r1 - SW] : 2 * y1 - y2;
+        const x3 = hasNext ? rowX[r2 + SW] : 2 * x2 - x1, y3 = hasNext ? rowY[r2 + SW] : 2 * y2 - y1;
+        for (let t = 0; t < D; t++) {
+          const o = t * 4, idx = (j * D + t) * SW + c;
+          smoothX[idx] = w[o] * x0 + w[o + 1] * x1 + w[o + 2] * x2 + w[o + 3] * x3;
+          smoothY[idx] = w[o] * y0 + w[o + 1] * y1 + w[o + 2] * y2 + w[o + 3] * y3;
+        }
+      }
+      smoothX[(SH - 1) * SW + c] = rowX[(rows - 1) * SW + c];
+      smoothY[(SH - 1) * SW + c] = rowY[(rows - 1) * SW + c];
+    }
+    return [smoothX, smoothY];
+  }
+
   render(g: CanvasRenderingContext2D, view: Viewport, p: ParamValues, m: MusicFrame): void {
     applyFeedback(this.fb, g, view, p, this.stepped);
     this.stepped = false;
@@ -330,49 +415,73 @@ class ClothSim implements SimulationModel {
     const restArea = rest * rest;
     const glow = 0.5 + Math.min(1, m.level) * 0.3 + m.kick * 0.15;
     // Each quad is shaded by how bunched up it is (folds go dark, stretched fabric catches the light).
-    const paths: Path2D[] = Array.from({ length: HUES * SHADES }, () => new Path2D());
-    const hues = new Float32Array(HUES * SHADES);
-    const used = new Uint8Array(HUES * SHADES);
-    for (let j = 0; j < rows - 1; j++) {
-      for (let i = 0; i < cols - 1; i++) {
-        const k = j * cols + i;
-        const top = hLink[k], left = vLink[k], right = vLink[k + 1], bottom = hLink[k + cols];
-        if (!alive[top] || !alive[left] || !alive[right] || !alive[bottom]) continue;
-        const a = k, b = k + 1, c = k + cols + 1, d = k + cols;
-        const area = Math.abs((x[c] - x[a]) * (y[d] - y[b]) - (y[c] - y[a]) * (x[d] - x[b])) / 2;
-        const shade = Math.min(1, (area / restArea) * 0.8 + dye[k] * 0.6);
-        let hue = schemeHue(scheme, i / (cols - 1), m.hue, m.beats);
-        if (dye[k] > 0.15) hue = dyeHue[k];
-        const hb = Math.floor((((hue % 360) + 360) % 360) / (360 / HUES)) % HUES;
-        const sb = Math.min(SHADES - 1, Math.floor(shade * SHADES));
-        const bucket = hb * SHADES + sb;
-        hues[bucket] = hb * (360 / HUES);
-        used[bucket] = 1;
-        const path = paths[bucket];
-        path.moveTo(x[a], y[a]);
-        path.lineTo(x[b], y[b]);
-        path.lineTo(x[c], y[c]);
-        path.lineTo(x[d], y[d]);
-        path.closePath();
-      }
-    }
-    for (let i = 0; i < paths.length; i++) {
-      if (!used[i]) continue;
+    // Smoothing draws each cell as D×D smaller quads laid on a curve through
+    // the neighbouring points, so folds look round without simulating more points.
+    // Capped so the total stays drawable: high resolutions are already smooth.
+    const cells = (cols - 1) * (rows - 1);
+    const D = Math.max(1, Math.min(Math.round((p.smoothing as number) || 1), Math.floor(Math.sqrt(MAX_QUADS / cells))));
+    const [sx, sy] = D > 1 ? this.smoothGrid(D) : [x, y];
+    const SW = (cols - 1) * D + 1;
+    const subArea = restArea / (D * D);
+    const styles = this.styles;
+    for (let i = 0; i < HUES * SHADES; i++) {
       const shade = (i % SHADES) / (SHADES - 1);
-      g.fillStyle = `hsla(${hues[i]} 80% ${12 + shade * 50 * glow + shade * 10}% / ${0.55 + shade * 0.4})`;
-      g.fill(paths[i]);
+      styles[i] = `hsla(${Math.floor(i / SHADES) * (360 / HUES)} 80% ${12 + shade * 50 * glow + shade * 10}% / ${0.55 + shade * 0.4})`;
+    }
+    // Quads go into one path per colour, filled a small tile at a time: software
+    // canvas rasterisers slow down badly on paths that span the whole fabric.
+    const paths: (Path2D | null)[] = new Array(HUES * SHADES).fill(null);
+    const used: number[] = [];
+    const tile = Math.max(2, Math.round(12 / D));
+    for (let tj = 0; tj < rows - 1; tj += tile) {
+      for (let ti = 0; ti < cols - 1; ti += tile) {
+        for (let j = tj; j < Math.min(rows - 1, tj + tile); j++) {
+          for (let i = ti; i < Math.min(cols - 1, ti + tile); i++) {
+            const k = j * cols + i;
+            const top = hLink[k], left = vLink[k], right = vLink[k + 1], bottom = hLink[k + cols];
+            if (!alive[top] || !alive[left] || !alive[right] || !alive[bottom]) continue;
+            let hue = schemeHue(scheme, i / (cols - 1), m.hue, m.beats);
+            if (dye[k] > 0.15) hue = dyeHue[k];
+            const hb = Math.floor((((hue % 360) + 360) % 360) / (360 / HUES)) % HUES;
+            for (let v = 0; v < D; v++) {
+              for (let u = 0; u < D; u++) {
+                const a = (j * D + v) * SW + i * D + u, b = a + 1, c = a + SW + 1, d = a + SW;
+                const area = Math.abs((sx[c] - sx[a]) * (sy[d] - sy[b]) - (sy[c] - sy[a]) * (sx[d] - sx[b])) / 2;
+                const shade = Math.min(1, (area / subArea) * 0.8 + dye[k] * 0.6);
+                const bucket = hb * SHADES + Math.min(SHADES - 1, Math.floor(shade * SHADES));
+                let path = paths[bucket];
+                if (!path) { path = paths[bucket] = new Path2D(); used.push(bucket); }
+                path.moveTo(sx[a], sy[a]);
+                path.lineTo(sx[b], sy[b]);
+                path.lineTo(sx[c], sy[c]);
+                path.lineTo(sx[d], sy[d]);
+                path.closePath();
+              }
+            }
+          }
+        }
+        used.sort((p, q) => p - q);
+        for (const bucket of used) {
+          g.fillStyle = styles[bucket];
+          g.fill(paths[bucket]!);
+          paths[bucket] = null;
+        }
+        used.length = 0;
+      }
     }
     if (p.threads) {
       g.globalCompositeOperation = "lighter";
-      const lines = new Path2D();
+      g.lineWidth = 0.6;
+      g.strokeStyle = `rgba(255,255,255,${0.06 + m.hat * 0.15 + m.treble * 0.1})`;
+      // Stroked a row of links at a time, for the same reason as the quads.
       const { ca, cb } = this;
+      let lines = new Path2D(), count = 0;
       for (let c = 0; c < ca.length; c++) {
         if (!alive[c]) continue;
         lines.moveTo(x[ca[c]], y[ca[c]]);
         lines.lineTo(x[cb[c]], y[cb[c]]);
+        if (++count === 2 * cols) { g.stroke(lines); lines = new Path2D(); count = 0; }
       }
-      g.lineWidth = 0.6;
-      g.strokeStyle = `rgba(255,255,255,${0.06 + m.hat * 0.15 + m.treble * 0.1})`;
       g.stroke(lines);
       g.lineWidth = 1;
       g.globalCompositeOperation = "source-over";
@@ -412,8 +521,8 @@ export const cloth: ModelDefinition = {
       description: "How heavy the fabric hangs. Low floats like chiffon; very high stretches and rips it.",
     },
     {
-      kind: "number", key: "wind", label: "Wind", min: -4000, max: 4000, step: 10, default: 60, group: "Forces", global: "energy",
-      description: "A gusty sideways breeze. Negative blows left, positive blows right.",
+      kind: "number", key: "wind", label: "Wind", min: -800, max: 800, step: 5, default: 40, group: "Forces", global: "energy",
+      description: "A gusty sideways breeze. Negative blows left, positive blows right. Around 700 matches the default gravity, so the fabric streams out sideways.",
     },
     {
       kind: "number", key: "stiffness", label: "Stiffness", min: 1, max: 40, step: 1, default: 6, group: "Behaviour",
@@ -428,10 +537,14 @@ export const cloth: ModelDefinition = {
       description: "Lets over-stretched links snap. Off: the cloth stretches without ever breaking.",
     },
     {
-      kind: "number", key: "heal", label: "Healing", min: 0, max: 5, step: 0.05, default: 1, group: "Behaviour",
-      description: "How fast torn fabric knits back together. Zero keeps every tear.",
+      kind: "number", key: "heal", label: "Healing", min: 0, max: 30, step: 0.1, default: 1, group: "Behaviour",
+      description: "How fast torn fabric knits back together. Zero keeps every tear; 30 closes cuts almost as fast as you make them.",
     },
     colourParam("notes"),
+    {
+      kind: "number", key: "smoothing", label: "Smoothing", min: 1, max: 4, step: 1, default: 2, group: "Look",
+      description: "Draws each square of fabric as 1 to 16 smaller polygons on a curve, so folds look round. Costs drawing time, not simulation, and eases off by itself at high resolutions.",
+    },
     {
       kind: "boolean", key: "threads", label: "Show threads", default: true, group: "Look",
       description: "Draws the weave as fine glowing lines over the fabric; they sparkle with the hi-hats.",
@@ -445,13 +558,13 @@ export const cloth: ModelDefinition = {
         : `How the ${side.toLowerCase()} edge is held. Free lets it flap; anchoring it stretches the fabric out that way.`,
     })),
     {
-      kind: "number", key: "resolution", label: "Resolution", min: 10, max: 90, step: 1, default: 48, resetOnChange: true, group: "Setup",
-      description: "How many points across the cloth. Higher is smoother but heavier to run.",
+      kind: "number", key: "resolution", label: "Resolution", min: 10, max: 200, step: 1, default: 48, resetOnChange: true, group: "Setup",
+      description: "How many points across the fabric, i.e. how many polygons it is made of. Higher folds more finely but is heavier to run.",
     },
   ],
   macros: [
     { key: "storm", label: "Storm", description: "A gale whips the fabric sideways and every hit slams into it.",
-      targets: [{ param: "wind", amount: 0.15 }, { param: "punch", amount: 0.6 }, { param: "stiffness", amount: -0.15 }, { param: "afterglow", amount: 0.2 }] },
+      targets: [{ param: "wind", amount: 0.3 }, { param: "punch", amount: 0.6 }, { param: "stiffness", amount: -0.15 }, { param: "afterglow", amount: 0.2 }] },
     { key: "float", label: "Weightless", description: "The fabric floats up and drifts with the music in a dreamy haze.",
       targets: [{ param: "gravity", amount: -0.1 }, { param: "spectrumLift", amount: 0.2 }, { param: "billow", amount: 0.15 }, { param: "afterglow", amount: 0.35 }, { param: "zoom", amount: 0.2 }] },
     { key: "shred", label: "Shred", description: "Heavy, brittle fabric that rips to ribbons on every hit, then knits back together.",
@@ -460,7 +573,7 @@ export const cloth: ModelDefinition = {
       targets: [{ param: "afterglow", amount: 0.35 }, { param: "spin", amount: 0.4 }, { param: "zoom", amount: -0.3 }, { param: "gravityMode", set: "swirl", at: 0.3 }] },
   ],
   modulations: [
-    { source: "lfoBar", target: "wind", amount: 0.08 },
+    { source: "lfoBar", target: "wind", amount: 0.03 },
     { source: "snare", target: "stiffness", amount: -0.2 },
     { source: "treble", target: "afterglow", amount: 0.2 },
   ],

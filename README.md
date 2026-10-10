@@ -10,11 +10,10 @@ Built with [Tauri 2](https://tauri.app) (Rust shell, native webview) and TypeScr
 
 | Model | What the music does | Interaction |
 | --- | --- | --- |
-| Particle bloom | A ring of light that breathes with the bass and bulges into the shape of the spectrum; kicks send shockwaves, notes and snares throw sparks | Click for sparks, hold to pull, right-drag to push |
 | Murmuration | A flock of light streaks chases each note and takes its colour, which spreads bird to bird; kicks scatter it, snares spin vortices | Hold to attract, right-click or Shift to scatter |
-| Fabric | The spectrum lifts the fabric like an equaliser; kicks blow gusts, notes pluck it and dye it. Each side (top, bottom, left, right) can be pinned on its own | Drag to pull the fabric, right-drag to slice it (it heals) |
-| Living ink | Reaction–diffusion that grows where the spectrum is loud; notes seed blooms, the palette follows the melody | Drag to seed, right-drag to wipe |
-| Cymatics | Glowing sand on a vibrating plate morphs to a new figure with every note; the round plate draws turning mandalas | Drag to stir the sand |
+| Fabric | The spectrum lifts the fabric like an equaliser; kicks blow gusts, notes pluck it and dye it. Each side (top, bottom, left, right) can be pinned on its own; Resolution (up to 200 points across) and Smoothing set how many polygons it is drawn with | Drag to pull the fabric, right-drag to slice it (it heals) |
+| Living ink | Reaction–diffusion that grows where the spectrum is loud; notes seed blooms, the palette follows the melody | Drag to seed (what you draw stays fed for Brush hold seconds, so joins hold), right-drag to wipe |
+| Cymatics | Glowing sand on a vibrating plate morphs to a new figure with every note; the round plate draws turning mandalas. The plate fills the screen by default, and with gravity on the sand streams through the figure endlessly | Drag to stir the sand |
 
 Shift works in place of right-click everywhere. Most models share a **Look** group: **Afterglow** leaves fading trails, and **Tunnel zoom** and **Tunnel spin** make those trails fly outward and turn, for a feedback-tunnel effect. A **Colours** dropdown picks between following the melody, a rainbow that cycles with the beat, fire and ice.
 
@@ -175,7 +174,6 @@ src/
   models/
     types.ts         the model interface
     registry.ts      list of available models
-    particles.ts     Particle bloom: a spectrum ring of glowing particles
     cloth.ts         Fabric: Verlet cloth lifted by the spectrum
     boids.ts         Murmuration: flocking light streaks
     reaction.ts      Living ink: Gray-Scott reaction-diffusion
