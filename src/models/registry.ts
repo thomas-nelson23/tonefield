@@ -1,6 +1,7 @@
 import type { ModelDefinition } from "./types";
 import { cloth } from "./cloth";
 import { boids } from "./boids";
+import { plexus } from "./plexus";
 import { reaction } from "./reaction";
 import { chladni } from "./chladni";
 
@@ -11,7 +12,7 @@ import { chladni } from "./chladni";
  */
 export const models: ModelDefinition[] = [
   boids,
-  cloth, reaction, chladni,
+  cloth, reaction, chladni, plexus,
 ];
 
 export function findModel(id: string): ModelDefinition | undefined {
