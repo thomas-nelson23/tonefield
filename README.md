@@ -14,6 +14,7 @@ Built with [Tauri 2](https://tauri.app) (Rust shell, native webview) and TypeScr
 | Fabric | The spectrum lifts the fabric like an equaliser; kicks blow gusts, notes pluck it and dye it. Each side (top, bottom, left, right) can be pinned on its own; Resolution (up to 200 points across) and Smoothing set how many polygons it is drawn with | Drag to pull the fabric, right-drag to slice it (it heals) |
 | Living ink | Reaction–diffusion that grows where the spectrum is loud; notes seed blooms, the palette follows the melody | Drag to seed (what you draw stays fed for Brush hold seconds, so joins hold), right-drag to wipe |
 | Cymatics | Glowing sand on a vibrating plate morphs to a new figure with every note; the round plate draws turning mandalas. The plate fills the screen by default, and with gravity on the sand streams through the figure endlessly | Drag to stir the sand |
+| Plexus | Glowing nodes joined by lines in a pattern you pick: a drifting web, constellations, counter-rotating star rings, string art, fractal branches or a rolling mesh. Notes fire signals that race along the lines, kicks burst the shape, the bass line bends it | Drag to pull nodes in, right-drag to push them away |
 
 Shift works in place of right-click everywhere. Most models share a **Look** group: **Afterglow** leaves fading trails, and **Tunnel zoom** and **Tunnel spin** make those trails fly outward and turn, for a feedback-tunnel effect. A **Colours** dropdown picks between following the melody, a rainbow that cycles with the beat, fire and ice.
 
@@ -178,6 +179,7 @@ src/
     boids.ts         Murmuration: flocking light streaks
     reaction.ts      Living ink: Gray-Scott reaction-diffusion
     chladni.ts       Cymatics: sand figures on a vibrating plate
+    plexus.ts        Plexus: nodes joined by lines in six patterns
     lib/visual.ts    trails / tunnel feedback, glow sprites, colour schemes
     lib/raster.ts    pixel buffer + palettes for grid models
     lib/music.ts     note colours and helpers for musical models
