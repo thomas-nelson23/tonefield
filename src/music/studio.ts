@@ -1,20 +1,20 @@
 import { SILENT_MUSIC, type ModRoute, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamSpec, type ParamValues, type ReactionSource } from "../models/types";
 import { noteHue } from "../models/lib/music";
 import { renderParamControls, type ParamControls } from "../ui/controls";
-import { AudioEngine, BeatDetector, type Waveform } from "./audio";
+import { knob, fader, type Dial } from "../ui/knob";
+import { AudioEngine, BeatDetector, type DrumKind, type TrackKey } from "./audio";
 import { dispatchMidi, openMidi, type MidiInputs } from "./midi";
 import { applyModulation, macroSpecs, modulatable, ModSources, SOURCES, sourceLabel, type NumberSpec } from "./modulation";
 import { GLOBAL_SPECS, applyGlobals, canvasFilter, defaultGlobals, sanitizeGlobals } from "./globals";
 import {
-  BASS_STYLES, CHORD_STYLES, CHORD_WAVES, WOBBLE_RATE_LABELS, DRUM_RESETS, DRUMS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES, STEPS, STYLES,
-  Sequencer, applyStyleDensities, chordName, sanitizeState, type DrumKey, type SequencerState,
+  BASS_STYLES, CHORD_STYLES, CHORD_WAVES, WOBBLE_RATE_LABELS, DRUM_RESETS, DRUMS, ECHO_TIME_LABELS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES,
+  STEPS, STYLES, SYNTH_WAVES, TRACKS, Sequencer, applyStyleDensities, chordName, faderGain, sanitizeState, type DrumKey, type SequencerState,
 } from "./sequencer";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 interface GlobalSettings {
   seq: SequencerState;
-  volume: number;
   thru: boolean;
   decay: number;
   inputs: string[];
@@ -27,6 +27,8 @@ interface GlobalSettings {
   intensity: number;
   /** Global Controls, as the user set them (see globals.ts). */
   globals: ParamValues;
+  /** The mixer strip whose controls are open: a track or "master". */
+  mixerTrack: TrackKey | "master";
 }
 
 /**
@@ -48,6 +50,10 @@ const GLOBAL_NUMBERS = GLOBAL_SPECS.filter((p): p is NumberSpec => p.kind === "n
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const choices = (rec: Record<string, { label: string }>) => Object.entries(rec).map(([value, o]) => ({ value, label: o.label }));
+const signed = (v: number, unit: string) => `${v > 0 ? "+" : ""}${v}${unit}`;
+const decibels = (gain: number) => (gain <= 0.0001 ? "-∞ dB" : `${signed(Number((20 * Math.log10(gain)).toFixed(1)), " dB")}`);
+const panLabel = (v: number) => (Math.abs(v) < 0.005 ? "C" : `${v < 0 ? "L" : "R"}${Math.round(Math.abs(v) * 100)}`);
+const octaves = (v: number) => (v === 0 ? "0" : signed(v, " oct"));
 const BASS_RANGE_LABELS = ["Root only", "+ octave", "+ fifth", "+ third", "+ low fifth", "+ seventh", "+ passing"];
 /** Drum ring radii as a share of the canvas radius, kick innermost. */
 const RING_RADII = [0.4, 0.68, 0.94];
@@ -72,6 +78,32 @@ function drumSpecs(key: DrumKey): ParamSpec[] {
       description: "Turns the pattern round its ring, so it starts on a different step." },
     { kind: "choice", key: `${key}Reset`, label: "Reset", options: DRUM_RESETS, default: "0",
       description: "Brings the pattern back to its start every so many bars." },
+    { kind: "number", key: `${key}Volume`, label: "Volume", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.8,
+      format: (v) => decibels(faderGain(v)), description: "This drum's level inside the drum track." },
+    { kind: "number", key: `${key}Pan`, label: "Pan", group: "Sound", min: -1, max: 1, step: 0.01, default: 0, format: panLabel,
+      description: "Moves this drum left or right." },
+    { kind: "number", key: `${key}Pitch`, label: "Pitch", group: "Sound", min: -12, max: 12, step: 1, default: 0,
+      format: (v) => signed(v, " st"), description: "Tunes the drum up or down, in semitones." },
+    { kind: "number", key: `${key}Decay`, label: "Decay", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: key === "hat" ? "Short and closed to long and open." : "How long the hit rings. 50% is the stock sound." },
+    { kind: "number", key: `${key}Tone`, label: key === "kick" ? "Punch" : key === "snare" ? "Snap" : "Bright", group: "Sound",
+      min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: key === "kick" ? "How hard the kick's pitch drops: soft thud to punchy click."
+        : key === "snare" ? "Body to rattle: more tone or more snare wires." : "How bright and sizzly the hat is." },
+  ];
+}
+
+/** A track's mixer controls: fader, pan and the two effect sends. */
+function mixerSpecs(key: TrackKey, label: string): ParamSpec[] {
+  return [
+    { kind: "number", key: `${key}Volume`, label: `${label} volume`, min: 0, max: 1, step: 0.01, default: 0.8,
+      format: (v) => decibels(faderGain(v)), description: "The track's level. The mark is 0 dB." },
+    { kind: "number", key: `${key}Pan`, label: `${label} pan`, min: -1, max: 1, step: 0.01, default: 0, format: panLabel,
+      description: "Moves the track left or right." },
+    { kind: "number", key: `${key}Echo`, label: `${label} echo`, min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "How much of the track goes to the echo. Set its time on the Master strip." },
+    { kind: "number", key: `${key}Space`, label: `${label} reverb`, min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "How much of the track goes to the reverb. Set its size on the Master strip." },
   ];
 }
 
@@ -80,7 +112,7 @@ function drumSpecs(key: DrumKey): ParamSpec[] {
  * and can be mapped to a MIDI knob (as `gen#<key>`).
  */
 const PARTS: { part: string; specs: ParamSpec[] }[] = [
-  { part: "Global", specs: [
+  { part: "Song", specs: [
     { kind: "number", key: "tempo", label: "Tempo", min: 40, max: 240, step: 1, default: 112, format: (v) => `${v} BPM` },
     { kind: "number", key: "swing", label: "Swing", min: 0, max: 0.8, step: 0.05, default: 0, format: pct,
       description: "Delays every second sixteenth for a shuffled feel." },
@@ -94,6 +126,23 @@ const PARTS: { part: string; specs: ParamSpec[] }[] = [
       description: "Which notes it may leave the root for: octave, fifth, chord tones, then passing notes." },
     { kind: "number", key: "bassVariation", label: "Variation", min: 0, max: 1, step: 0.01, default: 0.3, format: pct,
       description: "How much the bass line changes from bar to bar." },
+    { kind: "choice", key: "bassWave", label: "Wave", group: "Sound", options: SYNTH_WAVES, default: "sawtooth",
+      description: "The oscillator over the sub: saw is buzzy, square hollow, triangle and sine round." },
+    { kind: "number", key: "bassOctave", label: "Octave", group: "Sound", min: -2, max: 1, step: 1, default: 0, format: octaves },
+    { kind: "number", key: "bassSub", label: "Sub", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.75, format: pct,
+      description: "The pure sine an octave of weight under the bass." },
+    { kind: "number", key: "bassCutoff", label: "Cutoff", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: "Darker to brighter. 50% is the stock sound." },
+    { kind: "number", key: "bassReso", label: "Resonance", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.3, format: pct,
+      description: "A peak at the cutoff, for a squelchier, acid sound." },
+    { kind: "number", key: "bassEnv", label: "Envelope", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: "How far the filter opens at the start of each note." },
+    { kind: "number", key: "bassDecay", label: "Decay", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: "How quickly the filter closes after each note starts: short plucks to long sweeps." },
+    { kind: "number", key: "bassGlide", label: "Glide", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "Slides each note's pitch in from the last one." },
+    { kind: "number", key: "bassDrive", label: "Drive", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "Saturates the bass for grit and growl." },
   ] },
   { part: "Chords", specs: [
     { kind: "choice", key: "chordStyle", label: "Style", options: choices(CHORD_STYLES), default: "pop" },
@@ -117,6 +166,9 @@ const PARTS: { part: string; specs: ParamSpec[] }[] = [
       description: "Sweeps the tone open and closed in time with the music." },
     { kind: "number", key: "chordWobbleRate", label: "Wobble speed", group: "Sound", min: 0, max: WOBBLE_RATE_LABELS.length - 1, step: 1,
       default: 2, format: (v) => WOBBLE_RATE_LABELS[v] ?? String(v), description: "How long one sweep of the wobble takes." },
+    { kind: "number", key: "chordOctave", label: "Octave", group: "Sound", min: -1, max: 1, step: 1, default: 0, format: octaves },
+    { kind: "number", key: "chordReso", label: "Resonance", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "A peak at the filter's edge; strongest with Wobble." },
   ] },
   { part: "Melody", specs: [
     { kind: "choice", key: "melodyStyle", label: "Style", options: choices(MELODY_STYLES), default: "wander" },
@@ -126,6 +178,34 @@ const PARTS: { part: string; specs: ParamSpec[] }[] = [
       description: "How many melody notes play." },
     { kind: "number", key: "melodyGroove", label: "Groove", min: 0, max: 1, step: 0.01, default: 0.3, format: pct,
       description: "Adds rhythm: syncopated, clipped notes, and the second half-bar answers the first." },
+    { kind: "choice", key: "melodyWave", label: "Wave", group: "Sound", options: SYNTH_WAVES, default: "triangle",
+      description: "The oscillator: triangle is soft, saw bright, square hollow, sine pure." },
+    { kind: "number", key: "melodyOctave", label: "Octave", group: "Sound", min: -2, max: 2, step: 1, default: 0, format: octaves },
+    { kind: "number", key: "melodyBright", label: "Brightness", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: "Darker to brighter. 50% is the stock sound." },
+    { kind: "number", key: "melodyReso", label: "Resonance", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "A peak at the filter's edge, for a sharper, vocal tone." },
+    { kind: "number", key: "melodyAttack", label: "Attack", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "How slowly notes fade in: low plucks, high swells." },
+    { kind: "number", key: "melodyRelease", label: "Release", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "How long notes ring on after they end." },
+    { kind: "number", key: "melodyThick", label: "Thickness", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "Doubles each note with a detuned copy, for a wider sound." },
+    { kind: "number", key: "melodyVibrato", label: "Vibrato", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "A wavering pitch that eases in on each note." },
+    { kind: "number", key: "melodyGlide", label: "Glide", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "Slides each note's pitch in from the last one." },
+  ] },
+  { part: "Mixer", specs: TRACKS.flatMap((t) => mixerSpecs(t.key, t.label)) },
+  { part: "Master", specs: [
+    { kind: "number", key: "masterVolume", label: "Volume", min: 0, max: 1, step: 0.01, default: 0.7, format: decibels,
+      description: "The level of everything: sequencer, MIDI keyboard and audio file." },
+    { kind: "number", key: "echoTime", label: "Echo time", min: 0, max: ECHO_TIME_LABELS.length - 1, step: 1, default: 2,
+      format: (v) => ECHO_TIME_LABELS[v] ?? String(v), description: "The gap between echoes, in time with the tempo." },
+    { kind: "number", key: "echoFeedback", label: "Echo feedback", min: 0, max: 0.9, step: 0.01, default: 0.35, format: pct,
+      description: "How many times each echo repeats." },
+    { kind: "number", key: "spaceSize", label: "Reverb size", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: "A small room to a huge hall." },
   ] },
 ];
 
@@ -202,13 +282,16 @@ export class Studio {
   private ledTimer = 0;
   /** The last value a MIDI knob gave each model parameter, so the model only rebuilds when a knob actually changes it. */
   private lastCcValue: ParamValues = {};
-  private seqControls: ParamControls[] = [];
+  private seqControls: { refresh(): void }[] = [];
+  private seqTab!: HTMLElement;
+  /** Each mixer strip's meter, and the level it last showed (meters fall back slowly, like a peak meter's). */
+  private stripMeters: { key: TrackKey | "master"; dial: ReturnType<typeof fader>; level: number }[] = [];
+  private showStrips: () => void = () => {};
   private ringCtx: CanvasRenderingContext2D | null = null;
   private melodyCtx: CanvasRenderingContext2D | null = null;
   /** What the melody view and chord chips last drew, to skip redundant redraws. */
   private melodyDrawn = "";
   private chipsDrawn = "";
-  private leds: { el: HTMLElement; level: () => number }[] = [];
   private meterBars: Record<string, HTMLElement> = {};
   /** Live source bars in the matrix, refreshed while the Modulation tab is open. */
   private sourceMeters: { bar: HTMLElement; source: () => string }[] = [];
@@ -222,16 +305,20 @@ export class Studio {
   private chordHue = 210;
 
   constructor() {
-    const saved = load<Partial<GlobalSettings>>("music:global") ?? {};
+    const saved = load<Partial<GlobalSettings> & { volume?: number }>("music:global") ?? {};
     const seq = sanitizeState(saved.seq);
+    // The volume slider became the master fader.
+    if (typeof saved.volume === "number" && saved.seq && !("masterVolume" in saved.seq)) seq.masterVolume = saved.volume;
+    delete saved.volume;
     this.settings = {
-      volume: 0.7, thru: true, decay: 0.25, inputs: [], bindings: {}, dockHidden: false, musicOn: true, intensity: 1,
+      thru: true, decay: 0.25, inputs: [], bindings: {}, dockHidden: false, musicOn: true, intensity: 1, mixerTrack: "drums",
       ...saved,
       seq,
       globals: sanitizeGlobals(saved.globals),
     };
+    if (![...TRACKS.map((t) => t.key), "master"].includes(this.settings.mixerTrack)) this.settings.mixerTrack = "drums";
     this.seq = liveSeq = new Sequencer(this.audio, seq);
-    this.audio.setVolume(this.settings.volume);
+    this.audio.mix(this.seq.mixSettings());
     this.sources.decay = this.settings.decay;
     this.buildDock();
     void this.initMidi();
@@ -307,6 +394,7 @@ export class Studio {
       const v = this.beats.feed(bands.bass, nowSeconds);
       if (v > 0) this.pending.push({ note: 36, velocity: v, role: "kick", x: 0.5, source: "audio" });
     }
+    this.audio.mix(this.seq.mixSettings());
     const events = [...this.seq.drain(), ...this.pending];
     this.pending = [];
     for (const ev of events) {
@@ -457,8 +545,8 @@ export class Studio {
       noteOn: (ev) => {
         this.pending.push(ev);
         if (this.settings.thru) {
-          if (ev.role === "tone") this.audio.noteOn(ev.note, ev.velocity);
-          else this.audio.hit(ev.role, ev.note, ev.velocity, 0);
+          if (ev.role === "tone") this.audio.noteOn(ev.note, ev.velocity, this.seq.melodyTone());
+          else this.audio.drum(ev.role as DrumKind, ev.velocity, 0, this.seq.drumSound(ev.role as DrumKey));
         }
       },
       noteOff: (note) => {
@@ -740,15 +828,21 @@ export class Studio {
 
   // ---- Sequencer panel ---------------------------------------------------------
 
-  /** Build the Global, Drums, Bass, Chords and Melody sections. */
+  /**
+   * Build the sequencer tab: the song controls, the mixer strips, and the
+   * selected track's controls beside them, loosely after FL Studio's mixer
+   * and channel settings.
+   */
   private buildSequencer(): void {
     const s = this.settings;
     const seq = s.seq;
     const values = seq as unknown as ParamValues;
+    this.seqTab = document.querySelector<HTMLElement>('#dock-body .tab[data-tab="sequencer"]')!;
     const changed = (spec: ParamSpec) => {
       if (spec.key === "chordStyle") this.seq.refreshHarmony();
-      // Steps and density change each other's readouts (hits, offset within the length).
-      if (/^(kick|snare|hat)(Length|Density|Rotate)$/.test(spec.key)) this.refreshSeqControls();
+      // Steps and density change each other's readouts (hits, offset within the length),
+      // and the mixer and the Master panel share some controls.
+      if (/^(kick|snare|hat)(Length|Density|Rotate)$/.test(spec.key) || /^(echo|space|master)/.test(spec.key)) this.refreshSeqControls();
       this.seq.version++;
       this.saveGlobal();
     };
@@ -761,8 +855,12 @@ export class Studio {
       }
     };
     const specsOf = (part: string) => PARTS.find((p) => p.part === part)!.specs;
+    const patternOf = (part: string) => specsOf(part).filter((p) => !p.group);
+    // Sound controls go in their own column, so they don't need a foldable heading.
+    const soundOf = (part: string) => specsOf(part).filter((p) => p.group === "Sound").map((p) => ({ ...p, group: undefined }));
+    const spec = (part: string, key: string) => specsOf(part).find((p) => p.key === key) as NumberSpec;
 
-    // Global
+    // Song
     const style = $<HTMLSelectElement>("seq-style");
     for (const [id, st] of Object.entries(STYLES)) style.append(el("option", { value: id, textContent: st.label }));
     style.value = seq.style;
@@ -782,12 +880,7 @@ export class Studio {
     ROOTS.forEach((r, i) => root.append(el("option", { value: String(i), textContent: r })));
     root.value = String(seq.root);
     root.addEventListener("change", () => { seq.root = Number(root.value); this.seq.version++; this.saveGlobal(); root.blur(); });
-    const wave = $<HTMLSelectElement>("seq-wave");
-    wave.addEventListener("change", () => { this.audio.waveform = wave.value as Waveform; wave.blur(); });
-    render($("global-sliders"), specsOf("Global"));
-    const volume = $<HTMLInputElement>("seq-volume");
-    volume.value = String(s.volume);
-    volume.addEventListener("input", () => { s.volume = Number(volume.value); this.audio.setVolume(s.volume); this.saveGlobal(); });
+    render($("global-sliders"), specsOf("Song"));
     const mute = $<HTMLButtonElement>("seq-mute");
     const showMute = () => {
       mute.classList.toggle("active", !seq.sound);
@@ -804,7 +897,7 @@ export class Studio {
     });
     $("gen-new").addEventListener("click", () => { this.seq.newIdea(); this.saveGlobal(); });
     $("gen-fill").addEventListener("click", () => this.seq.fill());
-    // Hold: the global one freezes every part; each part's own freezes just that part.
+    // Hold: the global one freezes every track; each track's own freezes just that one.
     const holds: [HTMLButtonElement, "drumsHold" | "bassHold" | "chordsHold" | "melodyHold"][] = [];
     const hold = $<HTMLButtonElement>("gen-hold");
     const showHolds = () => {
@@ -820,17 +913,9 @@ export class Studio {
       this.saveGlobal();
       hold.blur();
     });
-
-    // Parts on and off, with a light that flashes as each one plays.
-    const parts: [string, "drumsOn" | "bassOn" | "chordsOn" | "melodyOn", () => number][] = [
-      ["drums", "drumsOn", () => Math.max(this.sources.get("kick"), this.sources.get("snare"), this.sources.get("hat"))],
-      ["bass", "bassOn", () => this.sources.get("bassline")],
-      ["chords", "chordsOn", () => this.sources.get("chord")],
-      ["melody", "melodyOn", () => this.sources.get("tone")],
-    ];
-    for (const [id, key, level] of parts) {
-      const holdKey = `${id}Hold` as "drumsHold" | "bassHold" | "chordsHold" | "melodyHold";
-      const partHold = $<HTMLButtonElement>(`hold-${id}`);
+    for (const t of TRACKS) {
+      const holdKey = `${t.key}Hold` as const;
+      const partHold = $<HTMLButtonElement>(`hold-${t.key}`);
       holds.push([partHold, holdKey]);
       partHold.addEventListener("click", () => {
         seq[holdKey] = !seq[holdKey];
@@ -838,35 +923,135 @@ export class Studio {
         this.saveGlobal();
         partHold.blur();
       });
-      const box = $<HTMLInputElement>(`part-${id}`);
-      const section = box.closest(".seq-part")!;
-      box.checked = seq[key];
-      section.classList.toggle("off", !seq[key]);
-      box.addEventListener("change", () => {
-        seq[key] = box.checked;
-        section.classList.toggle("off", !box.checked);
-        this.seq.version++;
-        this.saveGlobal();
-      });
-      this.leds.push({ el: $(`led-${id}`), level });
     }
     showHolds();
 
-    // Drums: one row per track beside the rings.
+    this.buildMixer(values, changed, spec);
+
+    // Drums: one row per drum beside the rings, its pattern on the left and its sound on the right.
     const tracks = $("drum-tracks");
+    tracks.append(el("div", { className: "drum-track drum-head" }, el("span"), el("span", { className: "section-label", textContent: "Pattern" }),
+      el("span", { className: "section-label", textContent: "Sound" })));
     for (const d of DRUMS) {
-      const sliders = el("div", { className: "drum-sliders" });
+      const pattern = el("div", { className: "drum-sliders" });
+      const sound = el("div", { className: "drum-sliders drum-sound" });
       const name = el("div", { className: "drum-name", textContent: d.label });
       name.style.color = d.colour;
-      tracks.append(el("div", { className: "drum-track" }, name, sliders));
-      render(sliders, specsOf(d.label));
+      const onKey = `${d.key}On` as const;
+      const muteDrum = el("button", { type: "button", className: "small strip-btn mute", textContent: "M", title: `Mute the ${d.label.toLowerCase()}` });
+      const row = el("div", { className: "drum-track" }, el("div", { className: "drum-label" }, name, muteDrum), pattern, sound);
+      const showDrum = () => {
+        muteDrum.classList.toggle("active", !seq[onKey]);
+        row.classList.toggle("off", !seq[onKey]);
+      };
+      muteDrum.addEventListener("click", () => {
+        seq[onKey] = !seq[onKey];
+        showDrum();
+        this.seq.version++;
+        this.saveGlobal();
+        muteDrum.blur();
+      });
+      showDrum();
+      tracks.append(row);
+      render(pattern, patternOf(d.label));
+      render(sound, soundOf(d.label));
     }
     this.buildRing();
 
-    render($("bass-controls"), specsOf("Bass"));
-    render($("chord-controls"), specsOf("Chords"));
-    render($("melody-controls"), specsOf("Melody"));
+    render($("bass-controls"), patternOf("Bass"));
+    render($("bass-sound"), soundOf("Bass"));
+    render($("chord-controls"), patternOf("Chords"));
+    render($("chord-sound"), soundOf("Chords"));
+    render($("melody-controls"), patternOf("Melody"));
+    render($("melody-sound"), soundOf("Melody"));
+    render($("master-controls"), specsOf("Master"));
     this.melodyCtx = $<HTMLCanvasElement>("melody-view").getContext("2d");
+    this.selectTrack(s.mixerTrack);
+  }
+
+  /** The mixer: a strip per track and a master strip. Clicking a strip opens its controls. */
+  private buildMixer(values: ParamValues, changed: (spec: ParamSpec) => void, spec: (part: string, key: string) => NumberSpec): void {
+    const seq = this.settings.seq;
+    const box = $("mixer");
+    const strips: { key: TrackKey | "master"; strip: HTMLElement; mute?: HTMLButtonElement; solo?: HTMLButtonElement }[] = [];
+    const dial = (d: Dial) => {
+      this.seqControls.push(d);
+      return d.el;
+    };
+    for (const t of [...TRACKS, { key: "master" as const, label: "Master", colour: "#d8d8d8" }]) {
+      const strip = el("div", { className: `strip${t.key === "master" ? " master" : ""}` });
+      strip.style.setProperty("--c", t.colour);
+      strip.dataset.track = t.key;
+      const readout = el("div", { className: "strip-readout" });
+      const knobs = el("div", { className: "strip-knobs" });
+      let volume: NumberSpec;
+      if (t.key === "master") {
+        knobs.append(dial(knob(spec("Master", "echoFeedback"), values, changed, "gen:", "Fdbk")),
+          dial(knob(spec("Master", "spaceSize"), values, changed, "gen:", "Room")));
+        volume = spec("Master", "masterVolume");
+      } else {
+        knobs.append(dial(knob(spec("Mixer", `${t.key}Pan`), values, changed, "gen:", "Pan")),
+          dial(knob(spec("Mixer", `${t.key}Echo`), values, changed, "gen:", "Echo")),
+          dial(knob(spec("Mixer", `${t.key}Space`), values, changed, "gen:", "Rev")));
+        volume = spec("Mixer", `${t.key}Volume`);
+      }
+      const f = fader(volume, values, changed, "gen:", readout);
+      this.seqControls.push(f);
+      this.stripMeters.push({ key: t.key, dial: f, level: 0 });
+      const buttons = el("div", { className: "strip-buttons" });
+      const entry: (typeof strips)[number] = { key: t.key, strip };
+      if (t.key !== "master") {
+        const key = t.key;
+        const mute = el("button", { type: "button", className: "small strip-btn mute", textContent: "M", title: "Mute: stops the track, so the visuals stop reacting to it too" });
+        const solo = el("button", { type: "button", className: "small strip-btn solo", textContent: "S", title: "Solo: play only the soloed tracks" });
+        mute.addEventListener("click", () => {
+          seq[`${key}On`] = !seq[`${key}On`];
+          this.seq.version++;
+          this.showStrips();
+          this.saveGlobal();
+          mute.blur();
+        });
+        solo.addEventListener("click", () => {
+          seq[`${key}Solo`] = !seq[`${key}Solo`];
+          this.seq.version++;
+          this.showStrips();
+          this.saveGlobal();
+          solo.blur();
+        });
+        buttons.append(mute, solo);
+        entry.mute = mute;
+        entry.solo = solo;
+      } else {
+        buttons.append(el("span", { className: "muted", textContent: "Out" }));
+      }
+      strip.append(el("div", { className: "strip-name", textContent: t.label }), knobs, f.el, readout, buttons);
+      strip.addEventListener("pointerdown", () => this.selectTrack(t.key));
+      box.append(strip);
+      strips.push(entry);
+    }
+    this.showStrips = () => {
+      for (const { key, strip, mute, solo } of strips) {
+        strip.classList.toggle("selected", key === this.settings.mixerTrack);
+        if (key === "master") continue;
+        mute!.classList.toggle("active", !seq[`${key}On`]);
+        solo!.classList.toggle("active", seq[`${key}Solo`]);
+        // Silent because it's muted, or because another track is soloed.
+        strip.classList.toggle("silent", !this.seq.audible(key));
+        this.seqTab.querySelector(`.track-body[data-track="${key}"]`)?.classList.toggle("off", !this.seq.audible(key));
+      }
+    };
+  }
+
+  /** Open a mixer strip's controls beside the mixer. */
+  private selectTrack(key: TrackKey | "master"): void {
+    for (const body of this.seqTab.querySelectorAll<HTMLElement>(".track-body")) body.hidden = body.dataset.track !== key;
+    if (this.settings.mixerTrack !== key) {
+      this.settings.mixerTrack = key;
+      this.saveGlobal();
+    }
+    // The track's views were hidden, so draw them afresh.
+    this.melodyDrawn = this.chipsDrawn = "";
+    this.showStrips();
   }
 
   private refreshSeqControls(): void {
@@ -942,14 +1127,21 @@ export class Studio {
     });
   }
 
-  /** Redraw the sequencer's views while its tab is open. */
+  /** Redraw the meters and the open track's views while the sequencer tab is showing. */
   private drawSequencer(): void {
-    const canvas = this.ringCtx?.canvas;
-    if (!canvas || canvas.offsetParent === null || $("dock").classList.contains("collapsed")) return;
-    for (const l of this.leds) l.el.style.opacity = String(0.15 + 0.85 * Math.min(1, l.level()));
-    this.drawRing();
-    this.drawMelody();
-    this.drawChords();
+    if (!this.seqTab || this.seqTab.hidden || $("dock").classList.contains("collapsed")) return;
+    const peaks = this.audio.peaks();
+    for (const m of this.stripMeters) {
+      // -48 dB to +6 dB fills the meter; it jumps up and falls back gently.
+      const p = peaks[m.key];
+      const h = p > 0 ? Math.max(0, (20 * Math.log10(p) + 48) / 54) : 0;
+      m.level = h > m.level ? h : Math.max(h, m.level - 0.025);
+      m.dial.meter(m.level);
+    }
+    const track = this.settings.mixerTrack;
+    if (track === "drums") this.drawRing();
+    else if (track === "melody") this.drawMelody();
+    else if (track === "chords") this.drawChords();
   }
 
   private drawRing(): void {
@@ -969,7 +1161,7 @@ export class Studio {
       const r = RING_RADII[i] * R;
       const len = this.seq.length(d.key);
       const angle = (pos: number) => -Math.PI / 2 + (pos / len) * Math.PI * 2;
-      const on = seq.drumsOn;
+      const on = this.seq.audible("drums") && seq[`${d.key}On`];
       g.globalAlpha = on ? 1 : 0.35;
       g.strokeStyle = "#30363d";
       g.lineWidth = 1;
@@ -1051,7 +1243,7 @@ export class Studio {
     const seq = this.settings.seq;
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth, h = canvas.clientHeight;
-    const key = [this.seq.version, this.seq.current, this.seq.chordIndex, seq.melodyDensity, seq.melodyRange, seq.melodyGroove, seq.melodyStyle, seq.melodyOn, seq.scale, seq.root, w, h, dpr].join("|");
+    const key = [this.seq.version, this.seq.current, this.seq.chordIndex, seq.melodyDensity, seq.melodyRange, seq.melodyGroove, seq.melodyStyle, this.seq.audible("melody"), seq.scale, seq.root, w, h, dpr].join("|");
     if (key === this.melodyDrawn) return;
     this.melodyDrawn = key;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {

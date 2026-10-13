@@ -280,34 +280,25 @@ body.learning #dock .param.learn-target { outline: 1px solid var(--macro); }
 #dock input[type="range"] { --thumb: #cfcfcf; }
 #dock .param input[type="range"] { display: block; }
 
-.tab[data-tab="sequencer"] { display: flex; gap: 12px; height: 100%; min-height: 230px; }
+.tab[data-tab="sequencer"] { display: flex; gap: 12px; height: 100%; min-height: 250px; }
 .tab[hidden] { display: none !important; }
 .seq-part {
   flex-shrink: 0; display: flex; flex-direction: column; gap: 6px;
   padding: 8px 10px; background: var(--bar); border: 1px solid var(--line); border-radius: 3px;
 }
-.seq-part.off > :not(.part-head) { opacity: 0.4; }
 .part-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 20px;
   margin: -2px 0 2px; padding-bottom: 5px; border-bottom: 1px solid #3a3a3a;
 }
 .part-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--strong); font-weight: 600; }
-.part-led { width: 8px; height: 8px; border-radius: 50%; opacity: 0.15; }
+.part-note { margin: 0; font-size: 11px; }
 .part-tools { display: inline-flex; align-items: center; gap: 8px; }
 button.hold { padding: 0 7px; font-size: 11px; }
 /* Held by the global Hold all rather than its own. */
 button.hold.forced { opacity: 0.6; }
-#led-drums { background: #f0883e; box-shadow: 0 0 6px #f0883e; }
-#led-bass { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
-#led-chords { background: #d2a8ff; box-shadow: 0 0 6px #d2a8ff; }
-#led-melody { background: #58a6ff; box-shadow: 0 0 6px #58a6ff; }
-.part-global { width: 360px; }
-.global-cols { display: grid; grid-template-columns: 180px 1fr; gap: 12px; }
-.part-bass { width: 180px; }
-.part-chords { width: 272px; }
-.part-melody { width: 200px; }
+.part-song { width: 200px; }
 .seq-controls { display: flex; flex-direction: column; gap: 5px; }
-.seq-controls > label:not(.check) { display: grid; grid-template-columns: 52px 1fr; align-items: center; color: var(--muted); }
+.seq-controls > label:not(.check) { display: grid; grid-template-columns: 44px 1fr; align-items: center; color: var(--muted); }
 .seq-controls select { padding: 2px 5px; }
 .seq-part .row-buttons { margin-top: 2px; gap: 6px; }
 .part-sliders .param { margin-bottom: 6px; }
@@ -316,29 +307,93 @@ button.hold.forced { opacity: 0.6; }
 .part-sliders .param:has(select) { display: grid; grid-template-columns: 52px 1fr; align-items: center; }
 .part-sliders .param:has(select) label { margin: 0; }
 .part-sliders .param-help, .drum-sliders .param-help { display: none; }
-.part-sliders.two-col { display: grid; grid-template-columns: 1fr 1fr; column-gap: 12px; }
-.part-sliders.two-col .param:has(select) { grid-column: 1 / -1; }
+.part-sliders.cols-2, .part-sliders.cols-3 { display: grid; column-gap: 14px; align-content: start; }
+.part-sliders.cols-2 { grid-template-columns: repeat(2, 150px); }
+.part-sliders.cols-3 { grid-template-columns: repeat(3, 150px); }
+
+/* Mixer strips, loosely after FL Studio's mixer: knobs on top, a fader and meter, then mute and solo. */
+#mixer { display: flex; gap: 4px; flex: 1; min-height: 0; }
+.strip {
+  --c: var(--text);
+  width: 84px; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 5px 3px 6px; border-radius: 3px; background: #2b2b2b; border: 1px solid var(--line);
+  border-top: 3px solid var(--c); cursor: pointer;
+}
+.strip:hover { background: #2f2f2f; }
+.strip.selected { background: #383838; border-color: var(--edge); border-top-color: var(--c); box-shadow: inset 0 0 0 1px var(--c); }
+.strip.master { margin-left: 6px; }
+.strip.silent .fader, .strip.silent .strip-knobs { opacity: 0.4; }
+.strip-name { font-size: 11px; font-weight: 600; color: var(--strong); white-space: nowrap; }
+.strip-knobs { display: flex; justify-content: center; gap: 0; min-height: 38px; }
+.strip-readout { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.strip-buttons { display: flex; gap: 3px; min-height: 18px; align-items: center; }
+.strip-buttons .muted { margin: 0; font-size: 10px; }
+button.strip-btn { width: 22px; padding: 0; font-size: 10px; font-weight: 700; line-height: 16px; }
+button.strip-btn.mute.active { background: #5a2a26; border-color: #ff7b72; color: #ffb3ad; }
+button.strip-btn.solo.active { background: #4d4416; border-color: #e3b341; color: #f2d77a; }
+
+.knob { display: flex; flex-direction: column; align-items: center; width: 20px; cursor: ns-resize; touch-action: none; }
+.strip-knobs .knob { width: 26px; }
+.knob svg { display: block; }
+.knob-track { fill: none; stroke: #4a4a4a; stroke-width: 2.5; stroke-linecap: round; }
+.knob-value { fill: none; stroke: var(--c, var(--accent)); stroke-width: 2.5; stroke-linecap: round; }
+.knob-cap { fill: #3c3c3c; stroke: #222; }
+.knob-pointer { stroke: var(--strong); stroke-width: 1.5; stroke-linecap: round; }
+.knob-label { font-size: 9px; color: var(--muted); white-space: nowrap; margin-top: -1px; font-variant-numeric: tabular-nums; }
+.knob.dragging .knob-label { color: var(--strong); }
+
+.fader { flex: 1; min-height: 70px; display: flex; gap: 5px; align-items: stretch; cursor: ns-resize; touch-action: none; padding: 4px 0; }
+.meter-v { width: 5px; background: #161616; border-radius: 1px; position: relative; overflow: hidden; }
+.meter-v-fill {
+  position: absolute; inset: 0; transform-origin: bottom; transform: scaleY(0);
+  background: linear-gradient(to top, #3fb950 0%, #3fb950 70%, #e3b341 85%, #ff5a4f 100%);
+  background-size: 100% 100%;
+}
+.fader-slot { width: 6px; background: #161616; border-radius: 3px; position: relative; }
+.fader-unity { position: absolute; left: -4px; right: -4px; height: 1px; background: #5a5a5a; }
+.fader-thumb {
+  position: absolute; left: -7px; width: 20px; height: 10px; margin-bottom: -5px; border-radius: 2px;
+  background: linear-gradient(#5a5a5a, #3a3a3a); border: 1px solid #1a1a1a; box-shadow: inset 0 1px 0 #777;
+}
+.fader-thumb::after { content: ""; position: absolute; left: 3px; right: 3px; top: 4px; height: 1px; background: var(--c); }
+.fader.dragging .fader-thumb { background: linear-gradient(#6a6a6a, #4a4a4a); }
+
+/* The selected track's controls, beside the mixer. */
+.part-track { flex: 1; min-width: 420px; overflow-x: auto; }
+.track-body { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.track-body[hidden] { display: none; }
+.track-body.off .track-cols, .track-body.off .drums-body { opacity: 0.45; }
+.track-body .part-head .chord-chips { flex: 1; }
+.track-cols { display: flex; gap: 22px; align-items: flex-start; }
+.track-col { display: flex; flex-direction: column; gap: 4px; }
+.track-col > .part-sliders:not(.cols-2):not(.cols-3) { width: 180px; }
+.melody-col { width: 314px; }
+.master-help { max-width: 320px; margin-top: 20px; }
 
 .drums-body { display: flex; gap: 12px; align-items: flex-start; }
 #drum-ring { width: 176px; height: 176px; cursor: grab; touch-action: none; flex-shrink: 0; }
 #drum-ring:active { cursor: grabbing; }
-#drum-tracks { display: flex; flex-direction: column; gap: 8px; width: 520px; }
-.drum-track { display: grid; grid-template-columns: 44px 1fr; align-items: center; gap: 6px; }
+#drum-tracks { display: flex; flex-direction: column; gap: 8px; }
+.drum-track { display: grid; grid-template-columns: 58px 430px 400px; align-items: center; gap: 6px 14px; }
+.drum-track.off .drum-sliders { opacity: 0.4; }
+.drum-head .section-label { margin-bottom: -4px; }
+.drum-label { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
 .drum-name { font-weight: 600; color: var(--strong); }
-.drum-sliders { display: grid; grid-template-columns: repeat(4, 1fr) 74px; column-gap: 10px; align-items: end; }
+.drum-sliders { display: grid; grid-template-columns: repeat(4, 1fr) 70px; column-gap: 8px; align-items: end; }
+.drum-sliders.drum-sound { grid-template-columns: repeat(5, 1fr); }
 .drum-sliders .param:has(select) label { display: block; }
 .drum-sliders .param select { padding: 1px 4px; width: 100%; }
 .drum-sliders .param { margin-bottom: 2px; }
 .drum-sliders .param label { margin-bottom: 0; color: var(--muted); white-space: nowrap; }
 
-.chord-chips { display: flex; flex-wrap: wrap; gap: 4px; min-height: 24px; }
+.chord-chips { display: flex; flex-wrap: wrap; gap: 4px; min-height: 20px; }
 .chip {
-  padding: 2px 8px; border-radius: 3px; background: var(--button); border: 1px solid var(--edge);
+  padding: 1px 8px; border-radius: 3px; background: var(--button); border: 1px solid var(--edge);
   color: var(--muted); font-variant-numeric: tabular-nums; transition: background 0.1s, color 0.1s;
 }
 .chip.current { background: #3a2d55; border-color: var(--macro); color: var(--strong); }
 .chip.lift { border-style: dashed; color: var(--macro); }
-#melody-view { width: 100%; height: 58px; border-radius: 3px; background: var(--app); flex-shrink: 0; }
+#melody-view { width: 100%; height: 58px; border-radius: 3px; background: var(--app); flex-shrink: 0; margin-bottom: 4px; }
 
 .mod-layout { display: grid; grid-template-columns: 300px 1fr; gap: 24px; }
 .mod-layout.bypassed .mod-main, .mod-layout.bypassed #mod-reactions { opacity: 0.4; }

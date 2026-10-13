@@ -86,63 +86,60 @@
           </nav>
           <div id="dock-body">
             <div class="tab" data-tab="sequencer">
-              <section class="seq-part part-global">
-                <header class="part-head"><span class="part-title">Global</span></header>
-                <div class="global-cols">
-                  <div class="seq-controls">
-                    <label>Style <select id="seq-style" title="The overall feel. Picking one sets the drum rings to its starting pattern."></select></label>
-                    <label>Scale <select id="seq-scale"></select></label>
-                    <label>Root <select id="seq-root"></select></label>
-                    <label>Synth <select id="seq-wave" title="The melody's sound">
-                      <option value="triangle">Soft</option>
-                      <option value="sawtooth">Bright</option>
-                      <option value="square">Hollow</option>
-                      <option value="sine">Pure</option>
-                    </select></label>
-                    <label>Volume <input id="seq-volume" type="range" min="0" max="1" step="0.01" /></label>
-                  </div>
-                  <div>
-                    <div id="global-sliders" class="part-sliders"></div>
-                    <div class="row-buttons">
-                      <button type="button" id="gen-new" class="small" title="Start from fresh patterns, melody and progression">New idea</button>
-                      <button type="button" id="gen-fill" class="small" title="Play a drum fill at the end of the bar">Fill</button>
-                      <button type="button" id="gen-hold" class="small" title="Freeze every part so it stops evolving">Hold all</button>
-                    </div>
-                  </div>
+              <section class="seq-part part-song">
+                <header class="part-head"><span class="part-title">Song</span></header>
+                <div class="seq-controls">
+                  <label>Style <select id="seq-style" title="The overall feel. Picking one sets the drum rings to its starting pattern."></select></label>
+                  <label>Scale <select id="seq-scale"></select></label>
+                  <label>Root <select id="seq-root"></select></label>
+                </div>
+                <div id="global-sliders" class="part-sliders"></div>
+                <div class="row-buttons">
+                  <button type="button" id="gen-new" class="small" title="Start from fresh patterns, melody and progression">New idea</button>
+                  <button type="button" id="gen-fill" class="small" title="Play a drum fill at the end of the bar">Fill</button>
+                  <button type="button" id="gen-hold" class="small" title="Freeze every track so it stops evolving">Hold all</button>
                 </div>
               </section>
-              <section class="seq-part part-drums">
-                <header class="part-head">
-                  <label class="check"><input id="part-drums" type="checkbox" /> <span class="part-title">Drums</span></label>
-                  <span class="part-tools"><button type="button" id="hold-drums" class="small hold" title="Freeze this part so it stops evolving; the others keep changing">Hold</button><span class="part-led" id="led-drums"></span></span>
-                </header>
-                <div class="drums-body">
-                  <canvas id="drum-ring" title="Drag a ring round to turn its pattern. Double-click to put it back where the style starts it."></canvas>
-                  <div id="drum-tracks"></div>
+              <section class="seq-part part-mixer">
+                <header class="part-head"><span class="part-title">Mixer</span><span class="muted part-note">Click a track to edit it</span></header>
+                <div id="mixer"></div>
+              </section>
+              <section class="seq-part part-track">
+                <div class="track-body" data-track="drums">
+                  <header class="part-head"><span class="part-title">Drums</span><span class="part-tools"><button type="button" id="hold-drums" class="small hold" title="Freeze this track so it stops evolving; the others keep changing">Hold</button></span></header>
+                  <div class="drums-body">
+                    <canvas id="drum-ring" title="Drag a ring round to turn its pattern. Double-click to put it back where the style starts it."></canvas>
+                    <div id="drum-tracks"></div>
+                  </div>
                 </div>
-              </section>
-              <section class="seq-part part-bass">
-                <header class="part-head">
-                  <label class="check"><input id="part-bass" type="checkbox" /> <span class="part-title">Bass</span></label>
-                  <span class="part-tools"><button type="button" id="hold-bass" class="small hold" title="Freeze this part so it stops evolving; the others keep changing">Hold</button><span class="part-led" id="led-bass"></span></span>
-                </header>
-                <div id="bass-controls" class="part-sliders"></div>
-              </section>
-              <section class="seq-part part-chords">
-                <header class="part-head">
-                  <label class="check"><input id="part-chords" type="checkbox" /> <span class="part-title">Chords</span></label>
-                  <span class="part-tools"><button type="button" id="hold-chords" class="small hold" title="Freeze this part so it stops evolving; the others keep changing">Hold</button><span class="part-led" id="led-chords"></span></span>
-                </header>
-                <div id="chord-chips" class="chord-chips"></div>
-                <div id="chord-controls" class="part-sliders two-col"></div>
-              </section>
-              <section class="seq-part part-melody">
-                <header class="part-head">
-                  <label class="check"><input id="part-melody" type="checkbox" /> <span class="part-title">Melody</span></label>
-                  <span class="part-tools"><button type="button" id="hold-melody" class="small hold" title="Freeze this part so it stops evolving; the others keep changing">Hold</button><span class="part-led" id="led-melody"></span></span>
-                </header>
-                <canvas id="melody-view"></canvas>
-                <div id="melody-controls" class="part-sliders"></div>
+                <div class="track-body" data-track="bass" hidden>
+                  <header class="part-head"><span class="part-title">Bass</span><span class="part-tools"><button type="button" id="hold-bass" class="small hold" title="Freeze this track so it stops evolving; the others keep changing">Hold</button></span></header>
+                  <div class="track-cols">
+                    <div class="track-col"><span class="section-label">Pattern</span><div id="bass-controls" class="part-sliders"></div></div>
+                    <div class="track-col"><span class="section-label">Synth</span><div id="bass-sound" class="part-sliders cols-3"></div></div>
+                  </div>
+                </div>
+                <div class="track-body" data-track="chords" hidden>
+                  <header class="part-head"><span class="part-title">Chords</span><div id="chord-chips" class="chord-chips"></div><span class="part-tools"><button type="button" id="hold-chords" class="small hold" title="Freeze this track so it stops evolving; the others keep changing">Hold</button></span></header>
+                  <div class="track-cols">
+                    <div class="track-col"><span class="section-label">Pattern</span><div id="chord-controls" class="part-sliders"></div></div>
+                    <div class="track-col"><span class="section-label">Synth</span><div id="chord-sound" class="part-sliders cols-3"></div></div>
+                  </div>
+                </div>
+                <div class="track-body" data-track="melody" hidden>
+                  <header class="part-head"><span class="part-title">Melody</span><span class="part-tools"><button type="button" id="hold-melody" class="small hold" title="Freeze this track so it stops evolving; the others keep changing">Hold</button></span></header>
+                  <div class="track-cols">
+                    <div class="track-col melody-col"><span class="section-label">Pattern</span><canvas id="melody-view"></canvas><div id="melody-controls" class="part-sliders cols-2"></div></div>
+                    <div class="track-col"><span class="section-label">Synth <span class="muted">· a MIDI keyboard plays through it too</span></span><div id="melody-sound" class="part-sliders cols-3"></div></div>
+                  </div>
+                </div>
+                <div class="track-body" data-track="master" hidden>
+                  <header class="part-head"><span class="part-title">Master</span></header>
+                  <div class="track-cols">
+                    <div class="track-col"><span class="section-label">Effects</span><div id="master-controls" class="part-sliders cols-2"></div></div>
+                    <p class="muted master-help">Each track's Echo and Reverb knobs in the mixer send it to these shared effects. Mute on a track stops its notes, so the visuals stop reacting to it too; the Mute button at the top silences everything but keeps the visuals going.</p>
+                  </div>
+                </div>
               </section>
             </div>
             <div class="tab" data-tab="modulation" hidden>
