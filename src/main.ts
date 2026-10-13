@@ -1,7 +1,7 @@
 import { models, findModel } from "./models/registry";
 import { defaultParams, SILENT_MUSIC, type ModelDefinition, type MusicFrame, type ParamSpec, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./models/types";
 import { renderParamControls, type ParamControls } from "./ui/controls";
-import { setupPanels } from "./ui/panels";
+import { setupPanels, setupRangeFill, setupSidebarToggle } from "./ui/panels";
 import { ColourGrade } from "./ui/grade";
 import { Studio } from "./music/studio";
 
@@ -183,6 +183,7 @@ function setRunning(value: boolean): void {
   if (value !== running) studio.setPaused(!value);
   running = value;
   playPause.textContent = running ? "Pause" : "Play";
+  playPause.classList.toggle("paused", !running);
   docState.textContent = running ? "" : "Paused";
   stepBtn.disabled = running;
 }
@@ -201,6 +202,7 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "Space") { e.preventDefault(); setRunning(!running); }
   else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); studio.toggleSequencer(); }
   else if (e.key === "r") model.reset(view, effective);
+  else if (e.key.toLowerCase() === "s" && !e.ctrlKey && !e.metaKey && !e.altKey) toggleSidebar();
   else if (e.key === "." && !running) model.step(def.fixedDt ?? 1 / 60, effective, music);
 });
 
@@ -252,6 +254,7 @@ function frame(now: number): void {
 // ---- Boot ------------------------------------------------------------------
 
 setupPanels();
+const toggleSidebar = setupSidebarToggle();
 populateModelSelect();
 resize();
 let initial = models[0].id;
@@ -262,5 +265,6 @@ try {
 }
 loadModel(initial);
 setRunning(true);
+setupRangeFill();
 new ResizeObserver(resize).observe(stage);
 requestAnimationFrame(frame);

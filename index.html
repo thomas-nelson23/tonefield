@@ -25,10 +25,6 @@
         <div class="tool-group">
           <button type="button" id="randomize" title="Set every parameter of this model to a random value">Randomize</button>
         </div>
-        <span class="spacer"></span>
-        <div class="tool-group">
-          <button type="button" id="dock-toggle" title="Hide the music panel">Hide music</button>
-        </div>
       </header>
       <aside id="sidebar">
         <details class="panel" data-panel="model" open>
@@ -211,8 +207,14 @@
             </div>
           </div>
         </section>
-        <footer id="statusbar"><span id="stats"></span><span class="spacer"></span><span class="status-hint">Space play/pause · R reset · Enter sequencer</span></footer>
       </main>
+      <footer id="statusbar">
+        <button type="button" id="dock-toggle" class="bar-toggle on" title="Hide the music panel"><span class="led"></span>Music</button>
+        <span id="stats"></span>
+        <span class="spacer"></span>
+        <span class="status-hint">Space play/pause · R reset · Enter sequencer · S sidebar</span>
+        <button type="button" id="sidebar-toggle" class="bar-toggle on" title="Hide the sidebar (S)"><span class="led"></span>Sidebar</button>
+      </footer>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
