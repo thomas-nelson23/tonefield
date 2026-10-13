@@ -19,6 +19,11 @@
   --accent-hover: #378ef0;
   --macro: #b58cf0;
   --track: #5a5a5a;
+  /* Track colours, for the mixer strips and track panels. */
+  --c-drums: #f0883e;
+  --c-bass: #3fb950;
+  --c-chords: #d2a8ff;
+  --c-melody: #58a6ff;
   /* Mixer strips, meters and faders in the sequencer. */
   --strip: #2b2b2b;
   --strip-hover: #2f2f2f;
@@ -323,14 +328,20 @@ button.hold.forced { opacity: 0.6; }
 /* Mixer strips, loosely after FL Studio's mixer: knobs on top, a fader and meter, then mute and solo. */
 #mixer { display: flex; gap: 4px; flex: 1; min-height: 0; }
 .strip {
-  --c: var(--text);
+  --c: var(--part, var(--text));
   width: 84px; display: flex; flex-direction: column; align-items: center; gap: 4px;
-  padding: 5px 3px 6px; border-radius: 3px; background: var(--strip); border: 1px solid var(--line);
+  padding: 5px 3px 6px; border-radius: var(--radius-sm, 3px); background: var(--strip); border: 1px solid var(--line);
   border-top: 3px solid var(--c); cursor: pointer;
 }
 .strip:hover { background: var(--strip-hover); }
 .strip.selected { background: var(--strip-selected); border-color: var(--edge); border-top-color: var(--c); box-shadow: inset 0 0 0 1px var(--c); }
-.strip.master { margin-left: 6px; }
+.strip.master { margin-left: 6px; --part: var(--text); }
+/* Each track's colour, shared by its strip and its panel. */
+.part-drums, .strip[data-track="drums"] { --part: var(--c-drums); }
+.part-bass, .strip[data-track="bass"] { --part: var(--c-bass); }
+.part-chords, .strip[data-track="chords"] { --part: var(--c-chords); }
+.part-melody, .strip[data-track="melody"] { --part: var(--c-melody); }
+.part-track .part-title { color: var(--part, var(--strong)); }
 .strip.silent .fader, .strip.silent .strip-knobs { opacity: 0.4; }
 .strip-name { font-size: 11px; font-weight: 600; color: var(--strong); white-space: nowrap; }
 .strip-knobs { display: flex; justify-content: center; gap: 0; min-height: 38px; }

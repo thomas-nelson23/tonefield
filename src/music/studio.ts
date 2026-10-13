@@ -978,9 +978,8 @@ export class Studio {
       this.seqControls.push(d);
       return d.el;
     };
-    for (const t of [...TRACKS, { key: "master" as const, label: "Master", colour: "#d8d8d8" }]) {
+    for (const t of [...TRACKS, { key: "master" as const, label: "Master" }]) {
       const strip = el("div", { className: `strip${t.key === "master" ? " master" : ""}` });
-      strip.style.setProperty("--c", t.colour);
       strip.dataset.track = t.key;
       const readout = el("div", { className: "strip-readout" });
       const knobs = el("div", { className: "strip-knobs" });
@@ -1045,6 +1044,9 @@ export class Studio {
   /** Open a mixer strip's controls beside the mixer. */
   private selectTrack(key: TrackKey | "master"): void {
     for (const body of this.seqTab.querySelectorAll<HTMLElement>(".track-body")) body.hidden = body.dataset.track !== key;
+    // The panel takes the track's colour.
+    const panel = this.seqTab.querySelector<HTMLElement>(".part-track")!;
+    for (const t of TRACKS) panel.classList.toggle(`part-${t.key}`, t.key === key);
     if (this.settings.mixerTrack !== key) {
       this.settings.mixerTrack = key;
       this.saveGlobal();

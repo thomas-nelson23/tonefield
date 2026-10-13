@@ -31,11 +31,11 @@ export const DRUM_RESETS = [
 export const MAX_DRUM_LENGTH = 32;
 
 /** The mixer's tracks, in strip order. */
-export const TRACKS: { key: TrackKey; label: string; colour: string }[] = [
-  { key: "drums", label: "Drums", colour: "#f0883e" },
-  { key: "bass", label: "Bass", colour: "#3fb950" },
-  { key: "chords", label: "Chords", colour: "#d2a8ff" },
-  { key: "melody", label: "Melody", colour: "#58a6ff" },
+export const TRACKS: { key: TrackKey; label: string }[] = [
+  { key: "drums", label: "Drums" },
+  { key: "bass", label: "Bass" },
+  { key: "chords", label: "Chords" },
+  { key: "melody", label: "Melody" },
 ];
 
 /** Echo times, in sixteenths. */
