@@ -710,7 +710,7 @@ export class Studio {
 
   private setDockHidden(hidden: boolean): void {
     $("dock").classList.toggle("collapsed", hidden);
-    $("dock-toggle").textContent = hidden ? "Show music" : "Hide music";
+    $("dock-toggle").classList.toggle("on", !hidden);
     $("dock-toggle").title = hidden ? "Show the music panel" : "Hide the music panel";
     if (this.settings.dockHidden !== hidden) {
       this.settings.dockHidden = hidden;
