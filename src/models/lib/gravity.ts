@@ -24,19 +24,12 @@ export const GRAVITY_MODES: { value: GravityMode; label: string }[] = [
   { value: "off", label: "Off" },
 ];
 
-/** The dropdown spec. `modes` limits the list for models that can't do every kind (e.g. uniform only). */
-export function gravityModeParam(def: GravityMode, modes?: GravityMode[], extra: Partial<ParamSpec> = {}): ParamSpec {
-  const options = GRAVITY_MODES.filter((m) => !modes || modes.includes(m.value));
-  return {
-    kind: "choice",
-    key: "gravityMode",
-    label: "Gravity direction",
-    description: "Where the gravity field pulls things. Point modes pull toward a spot or edge instead of a direction.",
-    group: "Gravity",
-    options,
-    default: def,
-    ...extra,
-  } as ParamSpec;
+/**
+ * The model's own gravity direction. No dropdown of its own: the global
+ * Direction picks it ("Each model's own" keeps `def`); macros can still switch it.
+ */
+export function gravityModeParam(def: GravityMode): ParamSpec {
+  return { kind: "choice", key: "gravityMode", label: "Gravity direction", options: GRAVITY_MODES, default: def, hidden: true };
 }
 
 /** True for modes that pull the same way everywhere, so callers can compute once per step. */

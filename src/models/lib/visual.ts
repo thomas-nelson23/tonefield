@@ -70,17 +70,16 @@ export class Feedback {
 }
 
 /**
- * The trail controls every visualizer shares, under a "Look" heading:
- * afterglow, tunnel zoom and spin.
+ * The trail values every visualizer shares: afterglow, tunnel zoom and spin.
+ * They have no sliders of their own: the global Trails, Tunnel zoom and Tunnel
+ * spin set them (Trails relative to the model's own `afterglow`), and macros
+ * can still push them.
  */
-export function feedbackParams(afterglow: number, zoom = 0, spin = 0): ParamSpec[] {
+export function feedbackParams(afterglow: number): ParamSpec[] {
   return [
-    { kind: "number", key: "afterglow", label: "Afterglow", min: 0, max: 0.99, step: 0.01, default: afterglow, group: "Look",
-      description: "How long everything leaves a fading trail. Near the top, trails pile up into smoky echoes." },
-    { kind: "number", key: "zoom", label: "Tunnel zoom", min: -1, max: 1, step: 0.01, default: zoom, group: "Look",
-      description: "Trails grow outward (positive) or shrink inward (negative), like flying through a tunnel." },
-    { kind: "number", key: "spin", label: "Tunnel spin", min: -90, max: 90, step: 1, default: spin, group: "Look",
-      description: "Trails turn around the centre, degrees per second. Combine with zoom for a spiral." },
+    { kind: "number", key: "afterglow", label: "Afterglow", min: 0, max: 0.99, step: 0.01, default: afterglow, hidden: true },
+    { kind: "number", key: "zoom", label: "Tunnel zoom", min: -1, max: 1, step: 0.01, default: 0, hidden: true },
+    { kind: "number", key: "spin", label: "Tunnel spin", min: -90, max: 90, step: 1, default: 0, hidden: true },
   ];
 }
 
@@ -126,19 +125,18 @@ export function hueToward(from: number, to: number, t: number): number {
   return (from + d * t + 360) % 360;
 }
 
-/** The colour-scheme dropdown several visualizers share. */
-export function colourParam(def: string, extra: { value: string; label: string }[] = []): ParamSpec {
-  return {
-    kind: "choice", key: "colours", label: "Colours", default: def, group: "Look",
-    description: "Where the colours come from. Notes colours everything by the pitch of the melody.",
-    options: [
-      { value: "notes", label: "Follow the melody" },
-      { value: "rainbow", label: "Rainbow, cycling with the beat" },
-      { value: "fire", label: "Fire" },
-      { value: "ice", label: "Ice" },
-      ...extra,
-    ],
-  };
+/** The colour schemes every visualizer offers, picked with the global Colour scheme. */
+export const COLOUR_SCHEMES = [
+  { value: "notes", label: "Follow the melody" },
+  { value: "rainbow", label: "Rainbow, cycling with the beat" },
+  { value: "fire", label: "Fire" },
+  { value: "ice", label: "Ice" },
+  { value: "bio", label: "Bioluminescent" },
+];
+
+/** The colour scheme a model draws with. No dropdown of its own: the global Colour scheme sets it; macros can still switch it. */
+export function colourParam(): ParamSpec {
+  return { kind: "choice", key: "colours", label: "Colours", default: "notes", options: COLOUR_SCHEMES, hidden: true };
 }
 
 /**
@@ -150,6 +148,7 @@ export function schemeHue(scheme: string, t: number, noteHue: number, beats: num
     case "rainbow": return (t * 300 + beats * 15) % 360;
     case "fire": return 5 + t * 50;
     case "ice": return 180 + t * 60;
+    case "bio": return 95 + t * 75;
     default: return (noteHue + (t - 0.5) * 70 + 360) % 360;
   }
 }

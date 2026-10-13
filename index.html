@@ -52,6 +52,16 @@
             <button type="button" id="global-reset" class="panel-action" title="Put every global control back to neutral">Reset</button>
           </summary>
           <div class="panel-body">
+            <div class="preset-row">
+              <select id="preset-select" title="Set every global control at once"></select>
+              <button type="button" id="preset-save" title="Save the global controls as a preset of your own">Save</button>
+              <button type="button" id="preset-delete" title="Delete this preset of yours">Delete</button>
+            </div>
+            <div class="preset-row" id="preset-save-row" hidden>
+              <input type="text" id="preset-name" placeholder="Preset name" maxlength="40" spellcheck="false" />
+              <button type="button" id="preset-save-ok" class="primary">Save</button>
+              <button type="button" id="preset-save-cancel">Cancel</button>
+            </div>
             <div id="global-controls"></div>
           </div>
         </details>
