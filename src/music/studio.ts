@@ -6,7 +6,7 @@ import { dispatchMidi, openMidi, type MidiInputs } from "./midi";
 import { applyModulation, macroSpecs, modulatable, ModSources, SOURCES, sourceLabel, type NumberSpec } from "./modulation";
 import { GLOBAL_SPECS, applyGlobals, canvasFilter, defaultGlobals, sanitizeGlobals } from "./globals";
 import {
-  BASS_STYLES, CHORD_SPEED_LABELS, CHORD_STYLES, DRUM_RESETS, DRUMS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES, STEPS, STYLES,
+  BASS_STYLES, CHORD_STYLES, DRUM_RESETS, DRUMS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES, STEPS, STYLES,
   Sequencer, applyStyleDensities, chordName, sanitizeState, type DrumKey, type SequencerState,
 } from "./sequencer";
 
@@ -97,14 +97,12 @@ const PARTS: { part: string; specs: ParamSpec[] }[] = [
   ] },
   { part: "Chords", specs: [
     { kind: "choice", key: "chordStyle", label: "Style", options: choices(CHORD_STYLES), default: "pop" },
-    { kind: "number", key: "chordSpeed", label: "Change every", min: 0, max: CHORD_SPEED_LABELS.length - 1, step: 1, default: 2,
-      format: (v) => CHORD_SPEED_LABELS[v] ?? String(v), description: "How long each chord lasts." },
     { kind: "number", key: "chordVariation", label: "Variation", min: 0, max: 1, step: 0.01, default: 0.3, format: pct,
       description: "How often the progression switches and chords are swapped for substitutes typical of the style." },
     { kind: "number", key: "chordDensity", label: "Rhythm density", min: 0, max: 1, step: 0.01, default: 0.3, format: pct,
-      description: "Low holds each chord; high plays it in a busy rhythm." },
+      description: "Low holds each chord for bars at a time, as the style would; higher fits in more chord changes and plays them in a busier rhythm." },
     { kind: "number", key: "chordRhythm", label: "Rhythm variation", min: 0, max: 1, step: 0.01, default: 0.25, format: pct,
-      description: "How much the chord rhythm changes from bar to bar." },
+      description: "How much the chord rhythm changes from bar to bar, and how often the pattern of chord changes is mixed up." },
   ] },
   { part: "Melody", specs: [
     { kind: "choice", key: "melodyStyle", label: "Style", options: choices(MELODY_STYLES), default: "wander" },
