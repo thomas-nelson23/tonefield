@@ -1,11 +1,15 @@
 import { SILENT_MUSIC, type ModRoute, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamSpec, type ParamValues, type ReactionSource } from "../models/types";
 import { noteHue } from "../models/lib/music";
 import { renderParamControls, type ParamControls } from "../ui/controls";
+import type { Grade } from "../ui/grade";
 import { knob, fader, type Dial } from "../ui/knob";
 import { AudioEngine, BeatDetector, type DrumKind, type TrackKey } from "./audio";
 import { dispatchMidi, openMidi, type MidiInputs } from "./midi";
 import { applyModulation, macroSpecs, modulatable, ModSources, SOURCES, sourceLabel, type NumberSpec } from "./modulation";
-import { GLOBAL_SPECS, applyGlobals, canvasFilter, defaultGlobals, sanitizeGlobals } from "./globals";
+import {
+  BUILT_IN_PRESETS, GLOBAL_SPECS, applyEnergy, defaultGlobals, gradeOf, matchesPreset, presetValues, sanitizeGlobals, setHidden,
+  type GlobalPreset,
+} from "./globals";
 import {
   BASS_STYLES, CHORD_STYLES, CHORD_WAVES, WOBBLE_RATE_LABELS, DRUM_RESETS, DRUMS, ECHO_TIME_LABELS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES,
   STEPS, STYLES, SYNTH_WAVES, TRACKS, Sequencer, applyStyleDensities, chordName, faderGain, sanitizeState, type DrumKey, type SequencerState,
@@ -27,6 +31,8 @@ interface GlobalSettings {
   intensity: number;
   /** Global Controls, as the user set them (see globals.ts). */
   globals: ParamValues;
+  /** Global Control presets the user saved, after the built-in ones. */
+  presets: GlobalPreset[];
   /** The mixer strip whose controls are open: a track or "master". */
   mixerTrack: TrackKey | "master";
 }
@@ -35,7 +41,7 @@ interface GlobalSettings {
  * Bump when models' default routes change enough that saved per-model
  * settings should be replaced by the new defaults.
  */
-const MODEL_SETTINGS_VERSION = 5;
+const MODEL_SETTINGS_VERSION = 6;
 
 interface ModelSettings {
   v: number;
@@ -307,6 +313,7 @@ export class Studio {
   constructor() {
     const saved = load<Partial<GlobalSettings> & { volume?: number }>("music:global") ?? {};
     const seq = sanitizeState(saved.seq);
+    window.addEventListener("pagehide", () => this.flushGlobal());
     // The volume slider became the master fader.
     if (typeof saved.volume === "number" && saved.seq && !("masterVolume" in saved.seq)) seq.masterVolume = saved.volume;
     delete saved.volume;
@@ -315,6 +322,7 @@ export class Studio {
       ...saved,
       seq,
       globals: sanitizeGlobals(saved.globals),
+      presets: sanitizePresets(saved.presets),
     };
     if (![...TRACKS.map((t) => t.key), "master"].includes(this.settings.mixerTrack)) this.settings.mixerTrack = "drums";
     this.seq = liveSeq = new Sequencer(this.audio, seq);
@@ -324,7 +332,21 @@ export class Studio {
     void this.initMidi();
   }
 
+  private saveTimer = 0;
+
+  /**
+   * Save soon rather than now: a dragged slider or a turning MIDI knob calls
+   * this many times a frame, and each save writes every music setting.
+   */
   private saveGlobal(): void {
+    if (this.saveTimer) return;
+    this.saveTimer = window.setTimeout(() => this.flushGlobal(), 400);
+  }
+
+  /** Save right away, e.g. as the window closes. */
+  flushGlobal(): void {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = 0;
     save("music:global", this.settings);
   }
 
@@ -375,14 +397,9 @@ export class Studio {
     ];
   }
 
-  /** The global controls this frame, after modulation. */
-  globals(): ParamValues {
-    return this.globalOut;
-  }
-
-  /** The CSS filter the global colour controls put over the canvas. */
-  canvasFilter(): string {
-    return canvasFilter(this.globalOut, this.beatsNow);
+  /** What the global colour controls do to the finished picture. */
+  grade(): Grade {
+    return gradeOf(this.globalOut, this.beatsNow);
   }
 
   // ---- Per-frame ---------------------------------------------------------
@@ -470,7 +487,6 @@ export class Studio {
   apply(out: ParamValues): void {
     if (!this.def) return;
     const depth = this.settings.musicOn ? this.settings.intensity : 0;
-    applyModulation(this.def, this.base, this.modelSettings.macros, this.modelSettings.routes, this.sources, out, this.macroOut, depth);
     // Routes can push the global controls too, by a share of each one's range.
     const g = this.globalOut, base = this.settings.globals;
     for (const k in base) g[k] = base[k];
@@ -483,7 +499,11 @@ export class Studio {
         g[spec.key] = Math.min(spec.max, Math.max(spec.min, (g[spec.key] as number) + r.amount * src * depth * (spec.max - spec.min)));
       }
     }
-    applyGlobals(this.def, g, out);
+    // The global controls stand in for the sliders of the model's hidden
+    // parameters, then macros and routes push on top, then Energy scales.
+    setHidden(this.def, g, this.base);
+    applyModulation(this.def, this.base, this.modelSettings.macros, this.modelSettings.routes, this.sources, out, this.macroOut, depth);
+    applyEnergy(this.def, g, out);
     this.paramControls?.showModulation(out);
     this.macroControls?.showModulation(this.macroOut);
     this.globalControls?.showModulation(g);
@@ -587,7 +607,7 @@ export class Studio {
       if (!spec) return;
       this.settings.globals[spec.key] = knobValue(spec, v);
       this.globalControls?.refresh();
-      this.saveGlobal();
+      this.globalsChanged();
       return;
     }
     if (!this.def) return;
@@ -695,11 +715,8 @@ export class Studio {
 
     // Global controls and macros
     this.renderGlobals();
-    $("global-reset").addEventListener("click", () => {
-      this.settings.globals = defaultGlobals();
-      this.saveGlobal();
-      this.renderGlobals();
-    });
+    $("global-reset").addEventListener("click", () => this.setGlobals(defaultGlobals()));
+    this.buildPresets();
     $("macros-reset").addEventListener("click", () => {
       for (const k in this.modelSettings.macros) this.modelSettings.macros[k] = 0;
       this.macroControls?.refresh();
@@ -800,7 +817,7 @@ export class Studio {
 
   private renderGlobals(): void {
     const box = $("global-controls");
-    this.globalControls = renderParamControls(box, GLOBAL_SPECS, this.settings.globals, () => this.saveGlobal(), "glob:");
+    this.globalControls = renderParamControls(box, GLOBAL_SPECS, this.settings.globals, () => this.globalsChanged(), "glob:");
     // The panel is short, so descriptions show as tooltips here instead of under each control.
     for (const row of box.querySelectorAll<HTMLElement>(".param[data-target]")) {
       row.title = GLOBAL_SPECS.find((p) => `glob:${p.key}` === row.dataset.target)?.description ?? "";
@@ -808,9 +825,95 @@ export class Studio {
     this.showRouteBadges();
   }
 
+  private globalsChanged(): void {
+    this.saveGlobal();
+    this.showPreset();
+  }
+
+  private setGlobals(values: ParamValues): void {
+    this.settings.globals = values;
+    this.globalsChanged();
+    this.renderGlobals();
+  }
+
+  // ---- Global presets -----------------------------------------------------
+
+  private presets(): GlobalPreset[] {
+    return [...BUILT_IN_PRESETS, ...this.settings.presets];
+  }
+
+  /** The preset the global controls are set to right now, if any; your own win over a built-in with the same values. */
+  private currentPreset(): GlobalPreset | null {
+    const g = this.settings.globals;
+    return [...this.settings.presets].reverse().find((p) => matchesPreset(g, p)) ?? BUILT_IN_PRESETS.find((p) => matchesPreset(g, p)) ?? null;
+  }
+
+  private buildPresets(): void {
+    const select = $<HTMLSelectElement>("preset-select");
+    const saveRow = $("preset-save-row"), name = $<HTMLInputElement>("preset-name");
+    select.addEventListener("change", () => {
+      const p = this.presets()[Number(select.value)];
+      if (p) this.setGlobals(presetValues(p));
+      select.blur();
+    });
+    $("preset-save").addEventListener("click", () => {
+      saveRow.hidden = false;
+      const current = this.currentPreset();
+      name.value = current && this.settings.presets.includes(current) ? current.name : "";
+      name.focus();
+    });
+    const finish = (keep: boolean) => {
+      const label = name.value.trim();
+      if (keep && label) {
+        // Saving under a name you already used replaces that preset.
+        const values = { ...this.settings.globals };
+        const mine = this.settings.presets.find((p) => p.name.toLowerCase() === label.toLowerCase());
+        if (mine) mine.values = values;
+        else this.settings.presets.push({ name: label, values });
+        this.saveGlobal();
+      }
+      saveRow.hidden = true;
+      name.blur();
+      this.showPreset();
+    };
+    $("preset-save-ok").addEventListener("click", () => finish(true));
+    $("preset-save-cancel").addEventListener("click", () => finish(false));
+    name.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") finish(true);
+      else if (e.key === "Escape") finish(false);
+    });
+    $("preset-delete").addEventListener("click", () => {
+      const current = this.currentPreset();
+      const i = current ? this.settings.presets.indexOf(current) : -1;
+      if (i < 0) return;
+      this.settings.presets.splice(i, 1);
+      this.saveGlobal();
+      this.showPreset();
+    });
+    this.showPreset();
+  }
+
+  /** List the presets and select the one the controls match, or "Custom". */
+  private showPreset(): void {
+    const select = $<HTMLSelectElement>("preset-select");
+    const current = this.currentPreset();
+    const all = this.presets();
+    const option = (value: string, label: string) => el("option", { value, textContent: label });
+    const mine = this.settings.presets.map((p, i) => option(String(BUILT_IN_PRESETS.length + i), p.name));
+    select.replaceChildren(
+      option("", "Custom"),
+      el("optgroup", { label: "Built in" }, ...BUILT_IN_PRESETS.map((p, i) => option(String(i), p.name))),
+      ...(mine.length ? [el("optgroup", { label: "Yours" }, ...mine)] : []),
+    );
+    (select.firstElementChild as HTMLOptionElement).hidden = current !== null;
+    select.value = current ? String(all.indexOf(current)) : "";
+    $<HTMLButtonElement>("preset-delete").disabled = !current || !this.settings.presets.includes(current);
+  }
+
   private setDockHidden(hidden: boolean): void {
     $("dock").classList.toggle("collapsed", hidden);
-    $("dock-toggle").textContent = hidden ? "Show music" : "Hide music";
+    $("dock-toggle").classList.toggle("on", !hidden);
     $("dock-toggle").title = hidden ? "Show the music panel" : "Hide the music panel";
     if (this.settings.dockHidden !== hidden) {
       this.settings.dockHidden = hidden;
@@ -1420,6 +1523,14 @@ export class Studio {
 
 
 /** A control's value for a 0..1 knob position (MIDI CC): numbers snap to their step, dropdowns pick by slice. */
+/** Saved presets with anything malformed dropped. */
+function sanitizePresets(saved: unknown): GlobalPreset[] {
+  if (!Array.isArray(saved)) return [];
+  return saved
+    .filter((p): p is GlobalPreset => !!p && typeof p.name === "string" && p.name.trim() !== "" && !!p.values && typeof p.values === "object")
+    .map((p) => ({ name: p.name.trim(), values: sanitizeGlobals(p.values) }));
+}
+
 function knobValue(spec: ParamSpec, v: number): number | boolean | string {
   if (spec.kind === "number") {
     const raw = spec.min + v * (spec.max - spec.min);

@@ -30,6 +30,7 @@ function saveCollapsed(set: Set<string>): void {
  * Builds sliders, checkboxes and dropdowns from a model's parameter specs. `onChange`
  * receives the spec that changed so the host can decide whether to reset.
  * Each row carries `data-target` (`targetPrefix` + key) so MIDI learn can find it.
+ * Specs marked `hidden` get no control.
  */
 export function renderParamControls(
   container: HTMLElement,
@@ -70,6 +71,7 @@ export function renderParamControls(
   };
 
   for (const spec of specs) {
+    if (spec.hidden) continue;
     const row = document.createElement("div");
     row.className = "param";
     row.dataset.target = targetPrefix + spec.key;

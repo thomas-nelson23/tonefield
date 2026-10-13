@@ -517,7 +517,7 @@ export const cloth: ModelDefinition = {
       description: "How hard kicks, snares and notes shove the fabric." },
     gravityModeParam("down"),
     {
-      kind: "number", key: "gravity", label: "Gravity strength", min: 0, max: 5000, step: 10, default: 700, group: "Gravity", global: "gravity",
+      kind: "number", key: "gravity", label: "Gravity strength", min: 0, max: 5000, step: 10, default: 700, global: "gravity", hidden: true,
       description: "How heavy the fabric hangs. Low floats like chiffon; very high stretches and rips it.",
     },
     {
@@ -540,7 +540,7 @@ export const cloth: ModelDefinition = {
       kind: "number", key: "heal", label: "Healing", min: 0, max: 30, step: 0.1, default: 1, group: "Behaviour",
       description: "How fast torn fabric knits back together. Zero keeps every tear; 30 closes cuts almost as fast as you make them.",
     },
-    colourParam("notes"),
+    colourParam(),
     {
       kind: "number", key: "smoothing", label: "Smoothing", min: 1, max: 4, step: 1, default: 2, group: "Look",
       description: "Draws each square of fabric as 1 to 16 smaller polygons on a curve, so folds look round. Costs drawing time, not simulation, and eases off by itself at high resolutions.",
@@ -549,7 +549,7 @@ export const cloth: ModelDefinition = {
       kind: "boolean", key: "threads", label: "Show threads", default: true, group: "Look",
       description: "Draws the weave as fine glowing lines over the fabric; they sparkle with the hi-hats.",
     },
-    ...feedbackParams(0.45, 0, 0),
+    ...feedbackParams(0.45),
     ...SIDES.map((side): ParamSpec => ({
       kind: "choice", key: `anchor${side}`, label: `${side} side`, group: "Anchors", options: ANCHOR_OPTIONS,
       default: side === "Top" ? "rings" : "free",
@@ -575,7 +575,7 @@ export const cloth: ModelDefinition = {
   modulations: [
     { source: "lfoBar", target: "wind", amount: 0.03 },
     { source: "snare", target: "stiffness", amount: -0.2 },
-    { source: "treble", target: "afterglow", amount: 0.2 },
+    { source: "treble", target: "global:trails", amount: 0.1 },
   ],
   reactions: [
     { source: "kick", text: "A gust that switches side on each kick" },

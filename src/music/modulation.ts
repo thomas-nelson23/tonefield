@@ -114,9 +114,12 @@ export class ModSources {
 
 export type NumberSpec = Extract<ParamSpec, { kind: "number" }>;
 
-/** Parameters that can be modulated: numbers that don't rebuild the model. */
+/**
+ * Parameters a route can push: numbers with a slider that don't rebuild the
+ * model. Hidden ones are reached through the global controls instead.
+ */
 export function modulatable(def: ModelDefinition): NumberSpec[] {
-  return def.params.filter((p): p is NumberSpec => p.kind === "number" && !p.resetOnChange);
+  return def.params.filter((p): p is NumberSpec => p.kind === "number" && !p.resetOnChange && !p.hidden);
 }
 
 /** Macros as slider specs, so the same control code can draw them. Without a description, it lists what each one pushes. */

@@ -61,18 +61,18 @@ html, body {
 
 /* ---- Fields and buttons ---- */
 
-select, button, input[type="number"], label.button {
+select, button, input[type="number"], input[type="text"], label.button {
   font: inherit;
   color: var(--text);
   border-radius: 3px;
 }
-select, input[type="number"] {
+select, input[type="number"], input[type="text"] {
   background: var(--field);
   border: 1px solid var(--edge);
   padding: 3px 6px;
 }
 select { width: 100%; }
-select:focus, input[type="number"]:focus { outline: 1px solid var(--accent); outline-offset: -1px; }
+select:focus, input[type="number"]:focus, input[type="text"]:focus { outline: 1px solid var(--accent); outline-offset: -1px; }
 input[type="number"] { width: 58px; }
 
 button, label.button {
@@ -157,8 +157,9 @@ label.check { display: inline-flex; align-items: center; gap: 6px; }
   border-right: 1px solid var(--line); border-top: 2px solid var(--accent);
 }
 .doc-state { color: var(--muted); }
-#stage { position: relative; overflow: hidden; flex: 1; min-height: 0; }
-#canvas { display: block; touch-action: none; cursor: crosshair; }
+#stage { position: relative; overflow: hidden; flex: 1; min-height: 0; touch-action: none; cursor: crosshair; }
+#canvas { display: block; }
+#stage .grade { position: absolute; top: 0; left: 0; pointer-events: none; }
 
 #statusbar {
   display: flex; align-items: center; gap: 12px; height: 22px; flex-shrink: 0;
@@ -197,6 +198,11 @@ label.check { display: inline-flex; align-items: center; gap: 6px; }
 .panel-body > .muted:first-child { margin-top: 0; }
 .sub-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 10px; }
 .sub-label + .muted { margin-top: 2px; }
+
+/* Global presets: a dropdown with Save and Delete beside it. */
+.preset-row { display: flex; gap: 4px; margin-bottom: 8px; }
+.preset-row[hidden] { display: none; }
+.preset-row select, .preset-row input { flex: 1; min-width: 0; }
 
 /* Rows in the panels: name, slider and value on one line, Photoshop-style. */
 #sidebar .param { margin-bottom: 6px; }
