@@ -6,7 +6,7 @@ import { dispatchMidi, openMidi, type MidiInputs } from "./midi";
 import { applyModulation, macroSpecs, modulatable, ModSources, SOURCES, sourceLabel, type NumberSpec } from "./modulation";
 import { GLOBAL_SPECS, applyGlobals, canvasFilter, defaultGlobals, sanitizeGlobals } from "./globals";
 import {
-  BASS_STYLES, CHORD_STYLES, DRUM_RESETS, DRUMS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES, STEPS, STYLES,
+  BASS_STYLES, CHORD_STYLES, CHORD_WAVES, WOBBLE_RATE_LABELS, DRUM_RESETS, DRUMS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES, STEPS, STYLES,
   Sequencer, applyStyleDensities, chordName, sanitizeState, type DrumKey, type SequencerState,
 } from "./sequencer";
 
@@ -103,6 +103,20 @@ const PARTS: { part: string; specs: ParamSpec[] }[] = [
       description: "Low holds each chord for bars at a time, as the style would; higher fits in more chord changes and plays them in a busier rhythm." },
     { kind: "number", key: "chordRhythm", label: "Rhythm variation", min: 0, max: 1, step: 0.01, default: 0.25, format: pct,
       description: "How much the chord rhythm changes from bar to bar, and how often the pattern of chord changes is mixed up." },
+    { kind: "choice", key: "chordWave", label: "Wave", group: "Sound", options: CHORD_WAVES, default: "style",
+      description: "The basic tone of the chords. Style's own uses the sound that comes with the chord style." },
+    { kind: "number", key: "chordBright", label: "Brightness", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: "Darker to brighter. 50% is the style's own." },
+    { kind: "number", key: "chordSpread", label: "Thickness", group: "Sound", min: 0, max: 1, step: 0.01, default: 0,
+      format: pct, description: "Doubles every note with a slightly detuned copy, for a wider, lusher chord." },
+    { kind: "number", key: "chordAttack", label: "Attack", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "How slowly the chords fade in: low plucks, high swells." },
+    { kind: "number", key: "chordRelease", label: "Release", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "How long the chords ring on after they end." },
+    { kind: "number", key: "chordWobble", label: "Wobble", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "Sweeps the tone open and closed in time with the music." },
+    { kind: "number", key: "chordWobbleRate", label: "Wobble speed", group: "Sound", min: 0, max: WOBBLE_RATE_LABELS.length - 1, step: 1,
+      default: 2, format: (v) => WOBBLE_RATE_LABELS[v] ?? String(v), description: "How long one sweep of the wobble takes." },
   ] },
   { part: "Melody", specs: [
     { kind: "choice", key: "melodyStyle", label: "Style", options: choices(MELODY_STYLES), default: "wander" },

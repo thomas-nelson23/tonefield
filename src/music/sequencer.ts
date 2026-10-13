@@ -167,6 +167,19 @@ export const CHORD_STYLES: Record<string, {
 };
 
 
+/** Oscillator shapes for the chords; "style" uses the chord style's own. */
+export const CHORD_WAVES: { value: string; label: string }[] = [
+  { value: "style", label: "Style's own" },
+  { value: "sine", label: "Soft (sine)" },
+  { value: "triangle", label: "Mellow (triangle)" },
+  { value: "sawtooth", label: "Bright (saw)" },
+  { value: "square", label: "Hollow (square)" },
+];
+
+/** Filter wobble speeds, in beats per cycle. */
+const WOBBLE_RATES = [8, 4, 2, 1, 0.5];
+export const WOBBLE_RATE_LABELS = ["2 bars", "1 bar", "½ bar", "1 beat", "½ beat"];
+
 export const MELODY_STYLES: Record<string, { label: string }> = {
   wander: { label: "Wander" },
   arp: { label: "Arpeggio" },
@@ -235,6 +248,15 @@ export interface SequencerState {
   chordDensity: number;
   /** How much the comping rhythm changes from bar to bar. */
   chordRhythm: number;
+  // Chord sound: "style" keeps the style's own wave; the rest are 0..1 except the
+  // wobble rate, an index into WOBBLE_RATES.
+  chordWave: string;
+  chordBright: number;
+  chordSpread: number;
+  chordAttack: number;
+  chordRelease: number;
+  chordWobble: number;
+  chordWobbleRate: number;
   /** Which progression of the style is playing. */
   prog: number;
   // Melody
@@ -256,6 +278,7 @@ export function defaultState(): SequencerState {
     hatDensity: 0, hatVariation: 0.4, hatRotate: 0, hatLength: STEPS, hatReset: "0",
     bassStyle: "pulse", bassDensity: 0.4, bassRange: 3, bassVariation: 0.3,
     chordStyle: "pop", chordVariation: 0.3, chordDensity: 0.3, chordRhythm: 0.25, prog: 0,
+    chordWave: "style", chordBright: 0.5, chordSpread: 0, chordAttack: 0, chordRelease: 0, chordWobble: 0, chordWobbleRate: 2,
     melodyStyle: "wander", melodyDensity: 0.4, melodyRange: 8, melodyGroove: 0.3,
   };
   applyStyleDensities(s);
@@ -293,6 +316,8 @@ export function sanitizeState(saved: unknown): SequencerState {
   if (!(s.bassStyle in BASS_STYLES)) s.bassStyle = "pulse";
   if (!(s.chordStyle in CHORD_STYLES)) s.chordStyle = "pop";
   if (!(s.melodyStyle in MELODY_STYLES)) s.melodyStyle = "wander";
+  if (!CHORD_WAVES.some((w) => w.value === s.chordWave)) s.chordWave = "style";
+  s.chordWobbleRate = Math.max(0, Math.min(WOBBLE_RATES.length - 1, Math.round(s.chordWobbleRate)));
   s.root = ((Math.round(s.root) % 12) + 12) % 12;
   s.bassRange = Math.max(1, Math.min(7, Math.round(s.bassRange)));
   s.melodyRange = Math.max(2, Math.min(16, Math.round(s.melodyRange)));
@@ -849,6 +874,23 @@ export class Sequencer {
     return this.chordGate[step] < chance(style.rhythm[step], s.chordDensity);
   }
 
+  /** The style's chord sound with the Sound controls applied. */
+  private chordTone(base: ChordTone): ChordTone {
+    const s = this.state;
+    const wave = s.chordWave === "style" ? base.wave : (s.chordWave as ChordTone["wave"]);
+    const beat = 60 / s.tempo;
+    return {
+      wave,
+      // Brightness 50% is the style's own cutoff; each end is two octaves away.
+      cutoff: base.cutoff * 2 ** ((s.chordBright - 0.5) * 4),
+      attack: base.attack + s.chordAttack ** 2 * 1.5,
+      release: 0.06 + s.chordRelease ** 2 * 2.5,
+      spread: s.chordSpread * 30,
+      wobbleRate: 1 / (beat * WOBBLE_RATES[Math.max(0, Math.min(WOBBLE_RATES.length - 1, Math.round(s.chordWobbleRate)))]),
+      wobbleDepth: s.chordWobble,
+    };
+  }
+
   // ---- Bass -------------------------------------------------------------------
 
   private bassOn(a: number): boolean {
@@ -1075,7 +1117,7 @@ export class Sequencer {
         if (s.chordStyle === "epic") notes = [notes[0] - 12, ...notes, notes[notes.length - 1] + 12];
         const mean = notes.reduce((x, y) => x + y, 0) / notes.length;
         events.push({ note: 48 + mod(this.key + c.root, 12), notes, velocity, role: "chord", x: Math.min(1, Math.max(0, (mean - 50) / 26)), source: "sequencer" });
-        if (s.sound) this.audio.chord(notes, velocity, t, len * Math.max(0.6, gap * style.legato), style.tone);
+        if (s.sound) this.audio.chord(notes, velocity, t, len * Math.max(0.6, gap * style.legato), this.chordTone(style.tone));
       }
 
       if (this.melodyOn(step, this.fillBar)) {

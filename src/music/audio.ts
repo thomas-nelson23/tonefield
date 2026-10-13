@@ -8,6 +8,13 @@ export interface ChordTone {
   wave: Waveform;
   cutoff: number;
   attack: number;
+  /** Seconds for the chord to fade after it ends. */
+  release?: number;
+  /** Cents between each note's two detuned oscillators; 0 plays one oscillator. */
+  spread?: number;
+  /** Filter wobble: speed in Hz and depth as a share of the cutoff. */
+  wobbleRate?: number;
+  wobbleDepth?: number;
 }
 
 const SILENT: AudioBands = { level: 0, bass: 0, mid: 0, treble: 0 };
@@ -158,20 +165,35 @@ export class AudioEngine {
     filter.frequency.setValueAtTime(tone.cutoff * (0.6 + 0.6 * velocity), t);
     filter.frequency.exponentialRampToValueAtTime(tone.cutoff * 0.45, t + Math.max(0.15, length));
     const gain = ctx.createGain();
-    const level = (velocity * 0.32) / Math.sqrt(Math.max(1, notes.length));
+    const level = (velocity * 0.32) / Math.sqrt(Math.max(1, notes.length)) / ((tone.spread ?? 0) > 0 ? Math.SQRT2 : 1);
     gain.gain.setValueAtTime(0, t);
     gain.gain.linearRampToValueAtTime(level, t + tone.attack);
     gain.gain.setTargetAtTime(level * 0.7, t + tone.attack, 0.25);
-    gain.gain.setTargetAtTime(0, t + length, 0.06);
+    const release = Math.max(0.06, tone.release ?? 0.06);
+    gain.gain.setTargetAtTime(0, t + length, release / 3);
     filter.connect(gain).connect(this.master);
+    const end = t + length + release * 2 + 0.3;
+    if (tone.wobbleDepth && tone.wobbleRate) {
+      // A slow LFO on the filter, so the chord sweeps open and closed.
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = tone.wobbleRate;
+      const depth = ctx.createGain();
+      depth.gain.value = tone.cutoff * tone.wobbleDepth * 0.9;
+      lfo.connect(depth).connect(filter.frequency);
+      lfo.start(t);
+      lfo.stop(end);
+    }
+    const spread = tone.spread ?? 0;
     for (const n of notes) {
-      const osc = ctx.createOscillator();
-      osc.type = tone.wave;
-      osc.frequency.value = midiToHz(n);
-      osc.detune.value = (Math.random() - 0.5) * 10;
-      osc.connect(filter);
-      osc.start(t);
-      osc.stop(t + length + 0.5);
+      for (const side of spread > 0 ? [-1, 1] : [0]) {
+        const osc = ctx.createOscillator();
+        osc.type = tone.wave;
+        osc.frequency.value = midiToHz(n);
+        osc.detune.value = side * spread * 0.5 + (Math.random() - 0.5) * 10;
+        osc.connect(filter);
+        osc.start(t);
+        osc.stop(end);
+      }
     }
   }
 
