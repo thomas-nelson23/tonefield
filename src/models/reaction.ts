@@ -1,7 +1,7 @@
 import type { ModelDefinition, MusicFrame, NoteEvent, ParamValues, PointerInput, SimulationModel, Viewport } from "./types";
 import { noteHash } from "./lib/music";
 import { Raster, hsl, palette } from "./lib/raster";
-import { Feedback, applyFeedback, feedbackParams, hueToward } from "./lib/visual";
+import { Feedback, applyFeedback, colourParam, feedbackParams, hueToward } from "./lib/visual";
 import { gravityAt, gravityModeParam, isUniform } from "./lib/gravity";
 
 /** Milliseconds per frame the reaction may spend iterating; see `step`. */
@@ -24,8 +24,8 @@ const PRESETS: Record<string, [number, number]> = {
 };
 
 const PALETTES: Record<string, Uint32Array> = {
-  ocean: palette([[0, 8, 12, 22], [0.25, 10, 60, 110], [0.5, 40, 170, 200], [0.75, 210, 240, 230], [1, 255, 255, 255]]),
-  ember: palette([[0, 10, 6, 6], [0.3, 120, 20, 10], [0.6, 240, 120, 30], [1, 255, 240, 180]]),
+  ice: palette([[0, 8, 12, 22], [0.25, 10, 60, 110], [0.5, 40, 170, 200], [0.75, 210, 240, 230], [1, 255, 255, 255]]),
+  fire: palette([[0, 10, 6, 6], [0.3, 120, 20, 10], [0.6, 240, 120, 30], [1, 255, 240, 180]]),
   bio: palette([[0, 6, 10, 8], [0.35, 30, 90, 40], [0.65, 150, 220, 80], [1, 240, 255, 200]]),
 };
 
@@ -72,7 +72,7 @@ class ReactionSim implements SimulationModel {
   private colShift = new Float32Array(0);
   private hue = 200;
   private lutHue = -1;
-  private lut: Uint32Array = PALETTES.ocean;
+  private lut: Uint32Array = PALETTES.ice;
   private flash = 0;
   private fb = new Feedback();
   private stepped = false;
@@ -316,7 +316,7 @@ class ReactionSim implements SimulationModel {
     if (this.shade.length === 0) return;
     applyFeedback(this.fb, g, view, p, this.stepped);
     this.stepped = false;
-    const scheme = p.palette as string;
+    const scheme = p.colours as string;
     let lut = PALETTES[scheme];
     if (!lut) {
       // "notes" follows the melody's colour; "rainbow" turns slowly with the beat.
@@ -413,7 +413,7 @@ export const reaction: ModelDefinition = {
   params: [
     { kind: "number", key: "spectrumGrowth", label: "Spectrum growth", min: 0, max: 2, step: 0.05, default: 0.6, group: "Music", global: "energy",
       description: "How much loud frequencies make their part of the screen grow. High values paint a living spectrogram." },
-    { kind: "number", key: "bloom", label: "Bass bloom", min: 0, max: 2, step: 0.05, default: 0.7, group: "Music", global: "size",
+    { kind: "number", key: "bloom", label: "Bass bloom", min: 0, max: 2, step: 0.05, default: 0.7, group: "Music",
       description: "A soft glow over the ink that swells with the bass." },
     { kind: "number", key: "feedShift", label: "Feed shift", min: -0.02, max: 0.02, step: 0.0005, default: 0, group: "Behaviour",
       description: "Nudges how fast fresh chemical is fed in. Up floods with growth, down starves it." },
@@ -423,25 +423,15 @@ export const reaction: ModelDefinition = {
       description: "How far the chemicals spread. Lower makes finer, tighter patterns." },
     { kind: "number", key: "speed", label: "Growth speed", min: 1, max: 32, step: 1, default: 10, group: "Behaviour",
       description: "How many reaction steps run each frame, i.e. how fast patterns grow." },
-    {
-      kind: "choice", key: "palette", label: "Colours", default: "notes", group: "Look",
-      description: "Colour scheme for the ink. Follow the melody re-tints it with every note.",
-      options: [
-        { value: "notes", label: "Follow the melody" },
-        { value: "rainbow", label: "Rainbow, cycling with the beat" },
-        { value: "ocean", label: "Ocean" },
-        { value: "ember", label: "Ember" },
-        { value: "bio", label: "Bioluminescent" },
-      ],
-    },
-    ...feedbackParams(0, 0, 0),
-    gravityModeParam("off", undefined, { label: "Flow direction", description: "Makes the ink flow, as if the dish were tilted. Point modes pour it toward a spot; Swirl stirs it." }),
-    { kind: "number", key: "fieldGravity", label: "Flow speed", min: 0, max: 400, step: 5, default: 60, group: "Gravity", global: "gravity",
+    colourParam(),
+    ...feedbackParams(0),
+    gravityModeParam("off"),
+    { kind: "number", key: "fieldGravity", label: "Flow speed", min: 0, max: 400, step: 5, default: 60, global: "gravity", hidden: true,
       description: "How fast the ink flows, pixels per second." },
     { kind: "boolean", key: "sharp", label: "Sharp edges", default: true, group: "Look",
       description: "Smooths the chemistry up to screen resolution before colouring it, so edges are crisp instead of blurry. Turn off for a few more frames per second on very big screens." },
-    { kind: "number", key: "contrast", label: "Contrast", min: 0.4, max: 5, step: 0.05, default: 1.6, group: "Look",
-      description: "How sharply the pattern's edges stand out. High values glow and saturate." },
+    // How sharply the pattern's edges stand out. The global Contrast covers it; macros still push it.
+    { kind: "number", key: "contrast", label: "Contrast", min: 0.4, max: 5, step: 0.05, default: 1.6, hidden: true },
     { kind: "number", key: "brush", label: "Brush size", min: 4, max: 150, step: 1, default: 14, group: "Brush",
       description: "Size of the area you seed or wipe when dragging." },
     { kind: "number", key: "brushHold", label: "Brush hold", min: 0, max: 120, step: 1, default: 40, group: "Brush",

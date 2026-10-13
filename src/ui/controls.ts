@@ -9,6 +9,14 @@ export interface ParamControls {
   showRoutes(labels: Record<string, string>): void;
 }
 
+/** Fill a slider's track up to its thumb (the CSS reads `--fill`). */
+export function paintRange(input: HTMLInputElement): void {
+  const min = Number(input.min || 0);
+  const max = Number(input.max || 100);
+  const fill = max > min ? ((Number(input.value) - min) / (max - min)) * 100 : 0;
+  input.style.setProperty("--fill", `${fill}%`);
+}
+
 /** Group headings the user has folded away, remembered across models and launches. */
 function loadCollapsed(): Set<string> {
   try {
@@ -30,6 +38,7 @@ function saveCollapsed(set: Set<string>): void {
  * Builds sliders, checkboxes and dropdowns from a model's parameter specs. `onChange`
  * receives the spec that changed so the host can decide whether to reset.
  * Each row carries `data-target` (`targetPrefix` + key) so MIDI learn can find it.
+ * Specs marked `hidden` get no control.
  */
 export function renderParamControls(
   container: HTMLElement,
@@ -70,6 +79,7 @@ export function renderParamControls(
   };
 
   for (const spec of specs) {
+    if (spec.hidden) continue;
     const row = document.createElement("div");
     row.className = "param";
     row.dataset.target = targetPrefix + spec.key;
@@ -92,7 +102,10 @@ export function renderParamControls(
       input.step = String(spec.step);
       input.value = String(values[spec.key]);
 
-      const show = () => (readout.textContent = spec.format ? spec.format(Number(input.value)) : formatNumber(Number(input.value), spec.step));
+      const show = () => {
+        readout.textContent = spec.format ? spec.format(Number(input.value)) : formatNumber(Number(input.value), spec.step);
+        paintRange(input);
+      };
       show();
       input.addEventListener("input", () => {
         values[spec.key] = Number(input.value);

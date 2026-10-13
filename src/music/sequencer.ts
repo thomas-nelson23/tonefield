@@ -1,5 +1,5 @@
 import type { NoteEvent, NoteRole } from "../models/types";
-import type { AudioEngine, ChordTone } from "./audio";
+import type { AudioEngine, BassTone, ChordTone, DrumSound, MelodyTone, MixSettings, TrackKey, Waveform } from "./audio";
 
 /** Sixteenth notes per bar. */
 export const STEPS = 16;
@@ -30,6 +30,31 @@ export const DRUM_RESETS = [
 /** Longest drum pattern, in sixteenths. */
 export const MAX_DRUM_LENGTH = 32;
 
+/** The mixer's tracks, in strip order. */
+export const TRACKS: { key: TrackKey; label: string }[] = [
+  { key: "drums", label: "Drums" },
+  { key: "bass", label: "Bass" },
+  { key: "chords", label: "Chords" },
+  { key: "melody", label: "Melody" },
+];
+
+/** Echo times, in sixteenths. */
+export const ECHO_TIMES = [1, 2, 3, 4, 6];
+export const ECHO_TIME_LABELS = ["1/16", "1/8", "Dotted 1/8", "1/4", "Dotted 1/4"];
+
+/** Oscillator shapes for the bass and melody synths. */
+export const SYNTH_WAVES: { value: Waveform; label: string }[] = [
+  { value: "sawtooth", label: "Saw" },
+  { value: "square", label: "Square" },
+  { value: "triangle", label: "Triangle" },
+  { value: "sine", label: "Sine" },
+];
+
+/** A fader position as gain: 0.8 is unity, the top is about +4 dB. */
+export function faderGain(v: number): number {
+  return (Math.max(0, v) / 0.8) ** 2;
+}
+
 export const ROOTS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 /**
@@ -57,6 +82,29 @@ export const BASS_STYLES: Record<string, { label: string; weights: number[]; leg
 };
 
 /**
+ * One level of a style's harmonic rhythm, used from Rhythm density `at` up.
+ * Each pattern gives the length in sixteenths of each chord of a four-chord
+ * progression (longer progressions repeat it). "8+8" plays the chord for 8 and
+ * then a style-typical approach chord into the next one for 8. Rhythm
+ * variation picks between a level's patterns from one pass to the next.
+ */
+export interface HarmonicRung {
+  at: number;
+  patterns: string[];
+}
+
+const TWO_BARS = "32 32 32 32";
+const MIXED_TWO = "32 32 48 16";
+const TURN_TWO = "32 32 32 16+16";
+const TURN_TWO_MID = "32 16+16 32 16+16";
+const ONE_BAR = "16 16 16 16";
+const MIXED_ONE = "16 16 24 8";
+const TURN_ONE = "16 16 16 8+8";
+const TURN_ONE_MID = "16 8+8 16 16";
+const HALF_BAR = "8 8 8 8";
+const MIXED_HALF = "8 8 12 4";
+
+/**
  * Chord progressions per style, as Roman numerals relative to the key, one
  * list for major-sounding scales and one for minor. "b" flattens the root,
  * lower case is minor, ° diminished, ø half-diminished; suffixes add 7ths,
@@ -71,6 +119,8 @@ export const CHORD_STYLES: Record<string, {
   /** How much of the gap to the next hit a chord holds for. */
   legato: number;
   tone: ChordTone;
+  /** Harmonic rhythm: how long chords last at each level of Rhythm density (see HarmonicRung). */
+  changes: HarmonicRung[];
 }> = {
   jazz: {
     label: "Jazz",
@@ -79,6 +129,16 @@ export const CHORD_STYLES: Record<string, {
     rhythm: [0.9, 0, 0, 0.2, 0, 0, 0.85, 0.1, 0, 0.3, 0.5, 0, 0, 0.2, 0.6, 0.15],
     legato: 0.6,
     tone: { wave: "triangle", cutoff: 2600, attack: 0.006 },
+    // Jazz moves: a bar per chord with ii-V turnarounds, up to two or four changes a bar.
+    changes: [
+      { at: 0, patterns: [TWO_BARS, MIXED_TWO] },
+      { at: 0.15, patterns: [ONE_BAR, MIXED_ONE] },
+      { at: 0.25, patterns: [TURN_ONE, TURN_ONE_MID] },
+      { at: 0.45, patterns: ["16 8+8 16 8+8"] },
+      { at: 0.6, patterns: [HALF_BAR, MIXED_HALF] },
+      { at: 0.8, patterns: ["8 8 8 4+4", "8 4+4 8 4+4"] },
+      { at: 0.92, patterns: ["4 4 4 4"] },
+    ],
   },
   pop: {
     label: "Pop",
@@ -87,6 +147,14 @@ export const CHORD_STYLES: Record<string, {
     rhythm: [1, 0, 0.3, 0, 0.5, 0, 0.6, 0, 0.8, 0, 0.3, 0.2, 0.5, 0, 0.6, 0.1],
     legato: 0.95,
     tone: { wave: "sawtooth", cutoff: 1500, attack: 0.02 },
+    // Pop: two bars per chord with a pickup into the next phrase, then a bar each, then faster.
+    changes: [
+      { at: 0, patterns: [TWO_BARS, MIXED_TWO] },
+      { at: 0.2, patterns: [TURN_TWO, TURN_TWO_MID] },
+      { at: 0.4, patterns: [ONE_BAR, MIXED_ONE] },
+      { at: 0.6, patterns: [TURN_ONE, TURN_ONE_MID] },
+      { at: 0.8, patterns: [HALF_BAR, MIXED_HALF] },
+    ],
   },
   dance: {
     label: "Dance",
@@ -95,6 +163,14 @@ export const CHORD_STYLES: Record<string, {
     rhythm: [0.15, 0, 1, 0, 0.15, 0, 1, 0, 0.15, 0, 1, 0, 0.15, 0.1, 1, 0.2],
     legato: 0.45,
     tone: { wave: "square", cutoff: 2200, attack: 0.004 },
+    // Dance loops sit on long, even chords; a sus pickup builds into the next phrase.
+    changes: [
+      { at: 0, patterns: [TWO_BARS] },
+      { at: 0.35, patterns: [TURN_TWO] },
+      { at: 0.5, patterns: [ONE_BAR] },
+      { at: 0.7, patterns: [TURN_ONE] },
+      { at: 0.85, patterns: [HALF_BAR] },
+    ],
   },
   epic: {
     label: "Epic",
@@ -103,12 +179,31 @@ export const CHORD_STYLES: Record<string, {
     rhythm: [1, 0.1, 0.7, 0.1, 0.8, 0.1, 0.7, 0.1, 0.9, 0.1, 0.7, 0.1, 0.8, 0.15, 0.75, 0.3],
     legato: 0.9,
     tone: { wave: "sawtooth", cutoff: 1900, attack: 0.012 },
+    // Epic holds chords for a long time and lets them swell.
+    changes: [
+      { at: 0, patterns: ["64 64 64 64", "64 64 96 32"] },
+      { at: 0.15, patterns: [TWO_BARS, MIXED_TWO] },
+      { at: 0.35, patterns: [TURN_TWO, TURN_TWO_MID] },
+      { at: 0.55, patterns: [ONE_BAR, MIXED_ONE] },
+      { at: 0.75, patterns: [TURN_ONE] },
+      { at: 0.9, patterns: [HALF_BAR] },
+    ],
   },
 };
 
-/** How long each chord lasts, in sixteenths, for each notch of the Change speed slider. */
-const CHORD_LENGTHS = [64, 32, 16, 8, 4];
-export const CHORD_SPEED_LABELS = ["4 bars", "2 bars", "1 bar", "½ bar", "1 beat"];
+
+/** Oscillator shapes for the chords; "style" uses the chord style's own. */
+export const CHORD_WAVES: { value: string; label: string }[] = [
+  { value: "style", label: "Style's own" },
+  { value: "sine", label: "Soft (sine)" },
+  { value: "triangle", label: "Mellow (triangle)" },
+  { value: "sawtooth", label: "Bright (saw)" },
+  { value: "square", label: "Hollow (square)" },
+];
+
+/** Filter wobble speeds, in beats per cycle. */
+const WOBBLE_RATES = [8, 4, 2, 1, 0.5];
+export const WOBBLE_RATE_LABELS = ["2 bars", "1 bar", "½ bar", "1 beat", "½ beat"];
 
 export const MELODY_STYLES: Record<string, { label: string }> = {
   wander: { label: "Wander" },
@@ -173,13 +268,24 @@ export interface SequencerState {
   bassVariation: number;
   // Chords
   chordStyle: string;
-  /** Index into CHORD_LENGTHS. */
-  chordSpeed: number;
   /** How often the progression is swapped or a chord substituted. */
   chordVariation: number;
   chordDensity: number;
   /** How much the comping rhythm changes from bar to bar. */
   chordRhythm: number;
+  // Chord sound: "style" keeps the style's own wave; the rest are 0..1 except the
+  // wobble rate, an index into WOBBLE_RATES.
+  chordWave: string;
+  chordBright: number;
+  chordSpread: number;
+  chordAttack: number;
+  chordRelease: number;
+  chordWobble: number;
+  chordWobbleRate: number;
+  /** Octaves up or down from where the chords are voiced. */
+  chordOctave: number;
+  /** Filter resonance, 0..1. */
+  chordReso: number;
   /** Which progression of the style is playing. */
   prog: number;
   // Melody
@@ -189,6 +295,41 @@ export interface SequencerState {
   melodyRange: number;
   /** 0..1: straight to syncopated, repeating and clipped. */
   melodyGroove: number;
+  // Melody sound (it's also what a MIDI keyboard plays through)
+  melodyWave: string;
+  melodyOctave: number;
+  melodyBright: number;
+  melodyReso: number;
+  melodyAttack: number;
+  melodyRelease: number;
+  melodyThick: number;
+  melodyVibrato: number;
+  melodyGlide: number;
+  // Bass sound
+  bassWave: string;
+  bassOctave: number;
+  bassSub: number;
+  bassCutoff: number;
+  bassReso: number;
+  bassEnv: number;
+  bassDecay: number;
+  bassGlide: number;
+  bassDrive: number;
+  // Per-drum sound: on/off, fader and pan, pitch in semitones, and 0..1 decay and tone.
+  kickOn: boolean; kickVolume: number; kickPan: number; kickPitch: number; kickDecay: number; kickTone: number;
+  snareOn: boolean; snareVolume: number; snarePan: number; snarePitch: number; snareDecay: number; snareTone: number;
+  hatOn: boolean; hatVolume: number; hatPan: number; hatPitch: number; hatDecay: number; hatTone: number;
+  // Mixer: per-track fader (0.8 is unity), pan -1..1, solo, and echo and reverb sends 0..1.
+  // A track's mute is `<track>On` switched off.
+  drumsVolume: number; drumsPan: number; drumsSolo: boolean; drumsEcho: number; drumsSpace: number;
+  bassVolume: number; bassPan: number; bassSolo: boolean; bassEcho: number; bassSpace: number;
+  chordsVolume: number; chordsPan: number; chordsSolo: boolean; chordsEcho: number; chordsSpace: number;
+  melodyVolume: number; melodyPan: number; melodySolo: boolean; melodyEcho: number; melodySpace: number;
+  // Master: output level (gain, 0..1), echo time (an ECHO_TIMES index) and feedback, reverb size.
+  masterVolume: number;
+  echoTime: number;
+  echoFeedback: number;
+  spaceSize: number;
 }
 
 export function defaultState(): SequencerState {
@@ -200,8 +341,22 @@ export function defaultState(): SequencerState {
     snareDensity: 0, snareVariation: 0.25, snareRotate: 0, snareLength: STEPS, snareReset: "0",
     hatDensity: 0, hatVariation: 0.4, hatRotate: 0, hatLength: STEPS, hatReset: "0",
     bassStyle: "pulse", bassDensity: 0.4, bassRange: 3, bassVariation: 0.3,
-    chordStyle: "pop", chordSpeed: 2, chordVariation: 0.3, chordDensity: 0.3, chordRhythm: 0.25, prog: 0,
+    chordStyle: "pop", chordVariation: 0.3, chordDensity: 0.3, chordRhythm: 0.25, prog: 0,
+    chordWave: "style", chordBright: 0.5, chordSpread: 0, chordAttack: 0, chordRelease: 0, chordWobble: 0, chordWobbleRate: 2,
+    chordOctave: 0, chordReso: 0,
     melodyStyle: "wander", melodyDensity: 0.4, melodyRange: 8, melodyGroove: 0.3,
+    melodyWave: "triangle", melodyOctave: 0, melodyBright: 0.5, melodyReso: 0, melodyAttack: 0, melodyRelease: 0,
+    melodyThick: 0, melodyVibrato: 0, melodyGlide: 0,
+    bassWave: "sawtooth", bassOctave: 0, bassSub: 0.75, bassCutoff: 0.5, bassReso: 0.3, bassEnv: 0.5, bassDecay: 0.5,
+    bassGlide: 0, bassDrive: 0,
+    kickOn: true, kickVolume: 0.8, kickPan: 0, kickPitch: 0, kickDecay: 0.5, kickTone: 0.5,
+    snareOn: true, snareVolume: 0.8, snarePan: 0, snarePitch: 0, snareDecay: 0.5, snareTone: 0.5,
+    hatOn: true, hatVolume: 0.8, hatPan: 0, hatPitch: 0, hatDecay: 0.5, hatTone: 0.5,
+    drumsVolume: 0.8, drumsPan: 0, drumsSolo: false, drumsEcho: 0, drumsSpace: 0,
+    bassVolume: 0.8, bassPan: 0, bassSolo: false, bassEcho: 0, bassSpace: 0,
+    chordsVolume: 0.8, chordsPan: 0, chordsSolo: false, chordsEcho: 0, chordsSpace: 0,
+    melodyVolume: 0.8, melodyPan: 0, melodySolo: false, melodyEcho: 0, melodySpace: 0,
+    masterVolume: 0.7, echoTime: 2, echoFeedback: 0.35, spaceSize: 0.5,
   };
   applyStyleDensities(s);
   return s;
@@ -238,8 +393,17 @@ export function sanitizeState(saved: unknown): SequencerState {
   if (!(s.bassStyle in BASS_STYLES)) s.bassStyle = "pulse";
   if (!(s.chordStyle in CHORD_STYLES)) s.chordStyle = "pop";
   if (!(s.melodyStyle in MELODY_STYLES)) s.melodyStyle = "wander";
+  if (!CHORD_WAVES.some((w) => w.value === s.chordWave)) s.chordWave = "style";
+  if (!SYNTH_WAVES.some((w) => w.value === s.bassWave)) s.bassWave = "sawtooth";
+  if (!SYNTH_WAVES.some((w) => w.value === s.melodyWave)) s.melodyWave = "triangle";
+  const clampInt = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(v)));
+  s.bassOctave = clampInt(s.bassOctave, -2, 1);
+  s.chordOctave = clampInt(s.chordOctave, -1, 1);
+  s.melodyOctave = clampInt(s.melodyOctave, -2, 2);
+  s.echoTime = clampInt(s.echoTime, 0, ECHO_TIMES.length - 1);
+  for (const d of DRUMS) num[`${d.key}Pitch`] = clampInt(num[`${d.key}Pitch`], -12, 12);
+  s.chordWobbleRate = Math.max(0, Math.min(WOBBLE_RATES.length - 1, Math.round(s.chordWobbleRate)));
   s.root = ((Math.round(s.root) % 12) + 12) % 12;
-  s.chordSpeed = Math.max(0, Math.min(CHORD_LENGTHS.length - 1, Math.round(s.chordSpeed)));
   s.bassRange = Math.max(1, Math.min(7, Math.round(s.bassRange)));
   s.melodyRange = Math.max(2, Math.min(16, Math.round(s.melodyRange)));
   return s;
@@ -372,8 +536,21 @@ export class Sequencer {
   drumCurrent: number[] = DRUMS.map(() => -1);
   /** Bumped whenever the pattern changes, so views know to redraw. */
   version = 0;
-  /** The progression this pass is playing, after Variation's substitutions. */
+  /** The chords this pass plays, after Variation's substitutions and with any approach chords. */
   cycle: Chord[] = [];
+  /** How long each chord of `cycle` lasts, in sixteenths. */
+  private lengths: number[] = [];
+  /** Which chord of the progression each chord of `cycle` belongs to (approach chords share it). */
+  private slots: number[] = [];
+  /** The progression this pass plays, before approach chords are added. */
+  private base: Chord[] = [];
+  /** Which harmonic-rhythm pattern of its level this pass uses. */
+  private rhythmPick = 0;
+  /** The level of harmonic rhythm `cycle` was laid out for. */
+  private rung = -1;
+  /** Absolute sixteenths where the scheduled chord started and where the next one starts. */
+  private chordStart = 0;
+  private changeAt = 0;
   /** Which chord of `cycle` is sounding. */
   chordIndex = 0;
   /** Epic's key change, in semitones, for this pass of the progression. */
@@ -498,16 +675,76 @@ export class Sequencer {
     const list = this.progressions();
     if (r() < v * 0.5) this.state.prog = (this.state.prog + 1 + Math.floor(r() * (list.length - 1))) % list.length;
     const syms = list[mod(this.state.prog, list.length)].split(" ");
-    this.cycle = syms.map((s) => {
+    this.base = syms.map((s) => {
       const c = parseChord(s);
       return r() < v * 0.45 ? this.substitute(c) : c;
     });
+    if (first) this.rhythmPick = 0;
+    else if (!this.held("chords") && r() < this.state.chordRhythm * 0.6) this.rhythmPick = Math.floor(r() * 4);
+    this.layout();
     // Epic's wildcard: some passes lift the whole song up a step or two, then it comes home.
     if (this.state.chordStyle === "epic" && !first && !this.held("chords")) {
       this.lift = this.lift === 0 && r() < v * 0.6 ? (r() < 0.5 ? 2 : 1) : 0;
     } else if (this.state.chordStyle !== "epic") {
       this.lift = 0;
     }
+  }
+
+  /** Which level of the style's harmonic rhythm Rhythm density reaches. */
+  private rungIndex(): number {
+    const style = CHORD_STYLES[this.state.chordStyle] ?? CHORD_STYLES.pop;
+    let i = 0;
+    while (i + 1 < style.changes.length && style.changes[i + 1].at <= this.state.chordDensity) i++;
+    return i;
+  }
+
+  /** Lay this pass's progression out in time, adding approach chords where the pattern splits a chord. */
+  private layout(): void {
+    const style = CHORD_STYLES[this.state.chordStyle] ?? CHORD_STYLES.pop;
+    this.rung = this.rungIndex();
+    const { patterns } = style.changes[this.rung];
+    const pattern = patterns[mod(this.rhythmPick, patterns.length)].split(" ");
+    this.cycle = [];
+    this.lengths = [];
+    this.slots = [];
+    this.base.forEach((c, i) => {
+      const [len, approach] = pattern[i % pattern.length].split("+").map(Number);
+      this.cycle.push(c);
+      this.lengths.push(len);
+      this.slots.push(i);
+      if (approach) {
+        this.cycle.push(this.approach(c, this.base[(i + 1) % this.base.length]));
+        this.lengths.push(approach);
+        this.slots.push(i);
+      }
+    });
+  }
+
+  /** A style-typical chord that leads from `c` into `next`. */
+  private approach(c: Chord, next: Chord): Chord {
+    let a: Chord;
+    switch (this.state.chordStyle) {
+      case "jazz":
+        // The next chord's own dominant seventh.
+        a = { numeral: `V7/${next.numeral}`, root: mod(next.root + 7, 12), tones: [0, 4, 7, 10] };
+        break;
+      case "dance":
+        a = { numeral: `${next.numeral}sus4`, root: next.root, tones: [0, 5, 7] };
+        break;
+      case "epic":
+        a = { numeral: `bVII/${next.numeral}`, root: mod(next.root - 2, 12), tones: [0, 4, 7] };
+        break;
+      default:
+        a = { numeral: `V/${next.numeral}`, root: mod(next.root + 7, 12), tones: [0, 4, 7] };
+    }
+    // Leading in with the chord that's already playing would sound like no change at all:
+    // jazz takes the tritone substitute instead, the others suspend the next chord.
+    if (a.root === c.root) {
+      a = this.state.chordStyle === "jazz"
+        ? { numeral: `subV7/${next.numeral}`, root: mod(next.root + 1, 12), tones: [0, 4, 7, 10] }
+        : { numeral: `${next.numeral}sus4`, root: next.root, tones: [0, 5, 7] };
+    }
+    return a;
   }
 
   /** A style-typical replacement for a chord. */
@@ -595,6 +832,51 @@ export class Sequencer {
     this.version++;
   }
 
+  /** Whether a track is heard: not muted, and soloed if any track is. */
+  audible(track: TrackKey): boolean {
+    const s = this.state;
+    if (!s[`${track}On`]) return false;
+    const solo = s.drumsSolo || s.bassSolo || s.chordsSolo || s.melodySolo;
+    return !solo || s[`${track}Solo`];
+  }
+
+  /** The mixer and master effects as the audio engine wants them. */
+  mixSettings(): MixSettings {
+    const s = this.state;
+    const track = (k: TrackKey) => ({ volume: faderGain(s[`${k}Volume`]), pan: s[`${k}Pan`], echo: s[`${k}Echo`], space: s[`${k}Space`] });
+    return {
+      master: s.masterVolume,
+      tracks: { drums: track("drums"), bass: track("bass"), chords: track("chords"), melody: track("melody") },
+      drums: DRUMS.map((d) => ({ volume: faderGain(this.num(`${d.key}Volume`)), pan: this.num(`${d.key}Pan`) })),
+      echoTime: this.stepLength * ECHO_TIMES[s.echoTime],
+      echoFeedback: s.echoFeedback,
+      spaceSize: s.spaceSize,
+    };
+  }
+
+  /** A drum's own sound controls. */
+  drumSound(key: DrumKey): DrumSound {
+    return { pitch: this.num(`${key}Pitch`), decay: this.num(`${key}Decay`), tone: this.num(`${key}Tone`) };
+  }
+
+  /** The bass synth's controls. */
+  bassTone(): BassTone {
+    const s = this.state;
+    return {
+      wave: s.bassWave as Waveform, sub: s.bassSub, cutoff: s.bassCutoff, reso: s.bassReso, env: s.bassEnv,
+      decay: s.bassDecay, glide: s.bassGlide, drive: s.bassDrive,
+    };
+  }
+
+  /** The melody synth's controls; MIDI keyboard notes play through it too. */
+  melodyTone(): MelodyTone {
+    const s = this.state;
+    return {
+      wave: s.melodyWave as Waveform, bright: s.melodyBright, reso: s.melodyReso, attack: s.melodyAttack,
+      release: s.melodyRelease, thick: s.melodyThick, vibrato: s.melodyVibrato, glide: s.melodyGlide,
+    };
+  }
+
   /** Whether a part is frozen, by its own Hold or the global one. */
   held(part: "drums" | "bass" | "chords" | "melody"): boolean {
     return this.state.hold || this.state[`${part}Hold`];
@@ -663,17 +945,26 @@ export class Sequencer {
 
   // ---- Harmony --------------------------------------------------------------
 
-  /** Sixteenths per chord. */
-  get chordLength(): number {
-    return CHORD_LENGTHS[Math.max(0, Math.min(CHORD_LENGTHS.length - 1, Math.round(this.state.chordSpeed)))];
+  /** Whether a new chord starts at absolute sixteenth `a` (at or after the one being scheduled). */
+  private isChange(a: number): boolean {
+    return a === this.chordStart || a >= this.changeAt;
   }
 
-  private advanceChord(): void {
+  private advanceChord(a: number): void {
+    // Rhythm density moved to another level: lay the pass out again and carry on with the next chord of the progression.
+    if (this.schedChord >= 0 && this.rungIndex() !== this.rung) {
+      const slot = this.slots[this.schedChord];
+      this.layout();
+      const nextSlot = this.slots.indexOf(slot + 1);
+      this.schedChord = (nextSlot < 0 ? this.cycle.length : nextSlot) - 1;
+    }
     this.schedChord++;
     if (this.schedChord >= this.cycle.length) {
       this.buildCycle(false);
       this.schedChord = 0;
     }
+    this.chordStart = a;
+    this.changeAt = a + (this.lengths[this.schedChord] ?? STEPS);
     this.voicing = this.voice(this.cycle[this.schedChord]);
     this.version++;
   }
@@ -706,20 +997,38 @@ export class Sequencer {
 
   private chordOn(a: number): boolean {
     const s = this.state;
-    if (!s.chordsOn || s.chordDensity <= 0) return false;
-    if (a % this.chordLength === 0) return true;
+    if (!this.audible("chords") || s.chordDensity <= 0) return false;
+    if (this.isChange(a)) return true;
     const style = CHORD_STYLES[s.chordStyle] ?? CHORD_STYLES.pop;
     const step = a % STEPS;
     return this.chordGate[step] < chance(style.rhythm[step], s.chordDensity);
+  }
+
+  /** The style's chord sound with the Sound controls applied. */
+  private chordTone(base: ChordTone): ChordTone {
+    const s = this.state;
+    const wave = s.chordWave === "style" ? base.wave : (s.chordWave as ChordTone["wave"]);
+    const beat = 60 / s.tempo;
+    return {
+      wave,
+      // Brightness 50% is the style's own cutoff; each end is two octaves away.
+      cutoff: base.cutoff * 2 ** ((s.chordBright - 0.5) * 4),
+      attack: base.attack + s.chordAttack ** 2 * 1.5,
+      release: 0.06 + s.chordRelease ** 2 * 2.5,
+      spread: s.chordSpread * 30,
+      wobbleRate: 1 / (beat * WOBBLE_RATES[Math.max(0, Math.min(WOBBLE_RATES.length - 1, Math.round(s.chordWobbleRate)))]),
+      wobbleDepth: s.chordWobble,
+      reso: s.chordReso,
+    };
   }
 
   // ---- Bass -------------------------------------------------------------------
 
   private bassOn(a: number): boolean {
     const s = this.state;
-    if (!s.bassOn || s.bassDensity <= 0) return false;
+    if (!this.audible("bass") || s.bassDensity <= 0) return false;
     const style = BASS_STYLES[s.bassStyle] ?? BASS_STYLES.pulse;
-    if (style.onChange && a % this.chordLength === 0) return true;
+    if (style.onChange && this.isChange(a)) return true;
     const step = a % STEPS;
     return this.bassGate[step] < chance(style.weights[step], s.bassDensity);
   }
@@ -739,8 +1048,8 @@ export class Sequencer {
         if (pool.length > 2 && pick > 0.8) interval = 7;
         break;
       case "walk": {
-        if (a % this.chordLength === 0) break;
-        const toNext = (a + 4) % this.chordLength < 4;
+        if (a === this.chordStart) break;
+        const toNext = this.changeAt - a <= 4;
         if (toNext && pool.length >= 3) {
           // Approach the next chord's root from a semitone away.
           let target = mod(next.root - c.root, 12);
@@ -771,7 +1080,7 @@ export class Sequencer {
 
   private melodyOn(step: number, fill: boolean): boolean {
     const s = this.state;
-    if (!s.melodyOn) return false;
+    if (!this.audible("melody")) return false;
     const density = fill && step >= 12 ? Math.min(1, s.melodyDensity + 0.2) : s.melodyDensity;
     // With groove, the second half-bar answers the first with the same rhythm.
     const gate = s.melodyGroove > 0.45 && step >= 8 ? this.melodyGate[step - 8] : this.melodyGate[step];
@@ -900,7 +1209,7 @@ export class Sequencer {
       const a = this.abs;
       const step = a % STEPS;
       if (step === 0 && a > 0) this.evolve();
-      if (a % this.chordLength === 0 || this.schedChord < 0) this.advanceChord();
+      if (this.schedChord < 0 || a >= this.changeAt) this.advanceChord(a);
       const c = this.cycle[this.schedChord];
       const next = this.cycle[(this.schedChord + 1) % this.cycle.length];
       const len = this.stepLength;
@@ -909,48 +1218,51 @@ export class Sequencer {
       const events: NoteEvent[] = [];
 
       const drumSteps = DRUMS.map((_, i) => this.drumPos(i, a));
-      if (s.drumsOn) {
+      if (this.audible("drums")) {
         DRUMS.forEach((d, i) => {
+          if (!this.state[`${d.key}On`]) return;
           const hit = this.drumHit(i, drumSteps[i], step);
           if (!hit.on) return;
           events.push({ note: d.note, velocity: hit.velocity, role: d.role, x: 0.5, source: "sequencer" });
-          if (s.sound) this.audio.hit(d.role, d.note, hit.velocity, Math.max(ctx.currentTime, t + this.drumVar[i].nudge * len));
+          if (s.sound) this.audio.drum(d.key, hit.velocity, Math.max(ctx.currentTime, t + this.drumVar[i].nudge * len), this.drumSound(d.key));
         });
       }
 
       if (this.bassOn(a)) {
         const style = BASS_STYLES[s.bassStyle] ?? BASS_STYLES.pulse;
-        const note = this.bassNote(a, c, next);
+        const note = this.bassNote(a, c, next) + 12 * s.bassOctave;
         let gap = 1;
-        while (gap < 16 && !this.bassOn(a + gap) && (a + gap) % this.chordLength !== 0) gap++;
+        while (gap < 16 && !this.bassOn(a + gap) && !this.isChange(a + gap)) gap++;
         const velocity = 0.55 + 0.4 * (style.weights[step] || 0.5);
         events.push({ note, velocity, role: "bassline", x: Math.min(1, Math.max(0, (note - 24) / 31)), source: "sequencer" });
-        if (s.sound) this.audio.bass(note, velocity, t, len * Math.max(0.5, gap * style.legato) * 0.95);
+        if (s.sound) this.audio.bass(note, velocity, t, len * Math.max(0.5, gap * style.legato) * 0.95, this.bassTone());
       }
 
       if (this.chordOn(a)) {
         const style = CHORD_STYLES[s.chordStyle] ?? CHORD_STYLES.pop;
         let gap = 1;
         while (gap < 64 && !this.chordOn(a + gap)) gap++;
-        const change = a % this.chordLength === 0;
+        const change = a === this.chordStart;
         const velocity = change ? 0.85 : 0.45 + 0.4 * style.rhythm[step];
         let notes = this.voicing;
         // Epic doubles the chord an octave below and above.
         if (s.chordStyle === "epic") notes = [notes[0] - 12, ...notes, notes[notes.length - 1] + 12];
+        if (s.chordOctave) notes = notes.map((n) => n + 12 * s.chordOctave);
         const mean = notes.reduce((x, y) => x + y, 0) / notes.length;
         events.push({ note: 48 + mod(this.key + c.root, 12), notes, velocity, role: "chord", x: Math.min(1, Math.max(0, (mean - 50) / 26)), source: "sequencer" });
-        if (s.sound) this.audio.chord(notes, velocity, t, len * Math.max(0.6, gap * style.legato), style.tone);
+        if (s.sound) this.audio.chord(notes, velocity, t, len * Math.max(0.6, gap * style.legato), this.chordTone(style.tone));
       }
 
       if (this.melodyOn(step, this.fillBar)) {
-        const { note, x } = this.melodyNote(step, c);
+        const { note: degreeNote, x } = this.melodyNote(step, c);
+        const note = degreeNote + 12 * s.melodyOctave;
         const w = this.melodyWeight(step);
         const velocity = Math.min(1, 0.5 + 0.4 * w + (s.melodyGroove > 0.3 && GROOVE_WEIGHT[step] > 0.8 ? 0.1 : 0));
         // Hold the note until the next one; Groove clips it shorter.
         const gap = this.melodyGap(step);
         const hold = Math.max(0.35, gap * (1 - 0.55 * s.melodyGroove));
         events.push({ note, velocity, role: "tone", x, source: "sequencer" });
-        if (s.sound) this.audio.hit("tone", note, velocity, t, len * hold * 0.95);
+        if (s.sound) this.audio.melody(note, velocity, t, len * hold * 0.95, this.melodyTone());
       }
 
       this.queue.push({ time: t, step, drumSteps, chord: this.schedChord, events });

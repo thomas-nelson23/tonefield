@@ -1,7 +1,8 @@
 import { models, findModel } from "./models/registry";
 import { defaultParams, SILENT_MUSIC, type ModelDefinition, type MusicFrame, type ParamSpec, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./models/types";
 import { renderParamControls, type ParamControls } from "./ui/controls";
-import { setupPanels } from "./ui/panels";
+import { setupPanels, setupRangeFill, setupSidebarToggle } from "./ui/panels";
+import { ColourGrade } from "./ui/grade";
 import { Studio } from "./music/studio";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -44,10 +45,9 @@ let accumulator = 0;
 let lastTime = performance.now();
 let fps = 0;
 let statsShown = 0;
-/** The global colour filter currently on the canvas. */
-let canvasFilterShown = "";
 
 const studio = new Studio();
+const grade = new ColourGrade(canvas);
 
 // ---- Model selection -------------------------------------------------------
 
@@ -108,6 +108,8 @@ function loadModel(id: string): void {
 function randomizeParams(): void {
   let rebuild = false;
   for (const spec of def.params) {
+    // The global controls set these.
+    if (spec.hidden) continue;
     const before = params[spec.key];
     if (spec.kind === "number") {
       const max = spec.resetOnChange ? Math.min(spec.max, Math.max(spec.min + spec.step, (spec.default as number) * 1.5)) : spec.max;
@@ -161,13 +163,15 @@ function sendPointer(type: PointerInput["type"], e: PointerEvent): void {
   );
 }
 
-canvas.addEventListener("pointerdown", (e) => {
-  canvas.setPointerCapture(e.pointerId);
+// On the stage rather than the canvas: while the colour controls are in use the
+// canvas hides under the overlay that shows it.
+stage.addEventListener("pointerdown", (e) => {
+  stage.setPointerCapture(e.pointerId);
   sendPointer("down", e);
 });
-canvas.addEventListener("pointermove", (e) => sendPointer("move", e));
-canvas.addEventListener("pointerup", (e) => sendPointer("up", e));
-canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+stage.addEventListener("pointermove", (e) => sendPointer("move", e));
+stage.addEventListener("pointerup", (e) => sendPointer("up", e));
+stage.addEventListener("contextmenu", (e) => e.preventDefault());
 // The webview's own right-click menu (Back, Reload, Print on Windows) only gets
 // in the way; text fields keep theirs for copy and paste.
 document.addEventListener("contextmenu", (e) => {
@@ -179,6 +183,7 @@ function setRunning(value: boolean): void {
   if (value !== running) studio.setPaused(!value);
   running = value;
   playPause.textContent = running ? "Pause" : "Play";
+  playPause.classList.toggle("paused", !running);
   docState.textContent = running ? "" : "Paused";
   stepBtn.disabled = running;
 }
@@ -197,6 +202,7 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "Space") { e.preventDefault(); setRunning(!running); }
   else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); studio.toggleSequencer(); }
   else if (e.key === "r") model.reset(view, effective);
+  else if (e.key.toLowerCase() === "s" && !e.ctrlKey && !e.metaKey && !e.altKey) toggleSidebar();
   else if (e.key === "." && !running) model.step(def.fixedDt ?? 1 / 60, effective, music);
 });
 
@@ -215,8 +221,7 @@ function frame(now: number): void {
   if (running) {
     // Fixed-timestep integration keeps physics stable on 60Hz and 120Hz screens alike.
     const dt = def.fixedDt ?? 1 / 60;
-    // The global Speed control runs the clock faster or slower for every model.
-    accumulator += elapsed * (studio.globals().speed as number);
+    accumulator += elapsed;
     let steps = 0;
     const start = performance.now();
     while (accumulator >= dt) {
@@ -235,8 +240,7 @@ function frame(now: number): void {
     g.fillRect(0, 0, view.width, view.height);
   }
   model.render(g, view, effective, music);
-  const filter = studio.canvasFilter();
-  if (filter !== canvasFilterShown) canvas.style.filter = canvasFilterShown = filter;
+  grade.draw(studio.grade());
 
   // A few times a second is plenty, and saves a sidebar re-layout every frame.
   if (now - statsShown > 250) {
@@ -250,6 +254,7 @@ function frame(now: number): void {
 // ---- Boot ------------------------------------------------------------------
 
 setupPanels();
+const toggleSidebar = setupSidebarToggle();
 populateModelSelect();
 resize();
 let initial = models[0].id;
@@ -260,5 +265,6 @@ try {
 }
 loadModel(initial);
 setRunning(true);
+setupRangeFill();
 new ResizeObserver(resize).observe(stage);
 requestAnimationFrame(frame);

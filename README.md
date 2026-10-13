@@ -20,7 +20,7 @@ Shift works in place of right-click everywhere. Most models share a **Look** gro
 
 Keyboard: `Space` play/pause the simulation, `Enter` play/stop the sequencer, `R` reset, `.` single step while paused.
 
-The window is laid out like Photoshop: an options bar across the top (model, transport, Randomize, show or hide the music panel), the canvas as the document in the middle, and foldable panels down the right for the model, its **Parameters**, the **Global controls** that apply to every model (colour, gravity, speed, motion, size) and the model's **Macros**.
+The window is laid out like Photoshop: an options bar across the top (model, transport, Randomize, show or hide the music panel), the canvas as the document in the middle, and foldable panels down the right for the model, its **Parameters**, the **Global controls** that apply to every model (colour, gravity, energy, trails and tunnel, with built-in presets and your own saved ones) and the model's **Macros**. Colour scheme, gravity, trails and the tunnel live only in the global controls, so no model slider fights them.
 
 ## Music
 

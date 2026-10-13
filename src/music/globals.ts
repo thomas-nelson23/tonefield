@@ -1,26 +1,22 @@
 import type { ModelDefinition, ParamSpec, ParamValues } from "../models/types";
 import { GRAVITY_MODES } from "../models/lib/gravity";
+import { COLOUR_SCHEMES } from "../models/lib/visual";
+import type { Grade } from "../ui/grade";
 
 /**
  * Global Controls: knobs that stay put when you switch models and push every
- * model the same way. Colour works on the finished picture (a filter over the
- * canvas) plus each model's colour dropdown; Speed runs the simulation clock
- * faster or slower; Gravity, Motion and Size move the matching sliders in
- * whichever model is showing (see `global` on ParamSpec).
+ * model the same way. The colour sliders work on the finished picture (see
+ * ui/grade.ts). Colour scheme, gravity, trails and the tunnel set values the
+ * models have no sliders for (`hidden` on ParamSpec), and Energy multiplies
+ * the sliders tagged `global: "energy"`.
  */
 
 const MODEL_OWN = "model";
 
 export const GLOBAL_SPECS: ParamSpec[] = [
-  { kind: "choice", key: "palette", label: "Colour scheme", group: "Color", default: MODEL_OWN,
-    description: "Overrides every model's colour dropdown.",
-    options: [
-      { value: MODEL_OWN, label: "Each model's own" },
-      { value: "notes", label: "Follow the melody" },
-      { value: "rainbow", label: "Rainbow, cycling with the beat" },
-      { value: "fire", label: "Fire" },
-      { value: "ice", label: "Ice" },
-    ] },
+  { kind: "choice", key: "palette", label: "Colour scheme", group: "Color", default: "notes",
+    description: "Where every model takes its colours from.",
+    options: COLOUR_SCHEMES },
   { kind: "number", key: "hueShift", label: "Hue shift", min: -180, max: 180, step: 1, default: 0, group: "Color",
     description: "Turns every colour round the colour wheel." },
   { kind: "number", key: "hueCycle", label: "Hue cycle", min: 0, max: 90, step: 1, default: 0, group: "Color",
@@ -34,22 +30,18 @@ export const GLOBAL_SPECS: ParamSpec[] = [
   { kind: "boolean", key: "invert", label: "Negative", default: false, group: "Color",
     description: "Inverts every colour: black backgrounds turn white." },
   { kind: "choice", key: "gravityMode", label: "Direction", group: "Gravity", default: MODEL_OWN,
-    description: "Overrides every model's gravity direction.",
+    description: "Where gravity pulls in every model. Each model's own: Fabric hangs down, the others float free.",
     options: [{ value: MODEL_OWN, label: "Each model's own" }, ...GRAVITY_MODES] },
-  { kind: "number", key: "gravity", label: "Gravity strength", min: 0, max: 4, step: 0.05, default: 1, group: "Gravity",
-    description: "Multiplies every model's gravity. 0 switches it off; 4 is four times as strong." },
-  { kind: "number", key: "speed", label: "Speed", min: 0, max: 4, step: 0.05, default: 1, group: "Speed",
-    description: "How fast everything moves. 0 freezes the motion while the music plays on; 4 is fast-forward." },
+  { kind: "number", key: "gravity", label: "Gravity strength", min: 0, max: 5, step: 0.05, default: 1, group: "Gravity",
+    description: "How hard gravity pulls, as a multiple of each model's normal pull. 0 switches it off." },
   { kind: "number", key: "energy", label: "Energy", min: 0, max: 4, step: 0.05, default: 1, group: "Motion",
     description: "Multiplies how wildly things move and how hard hits land." },
   { kind: "number", key: "trails", label: "Trails", min: -1, max: 1, step: 0.01, default: 0, group: "Motion",
-    description: "Lengthens every model's afterglow (or cuts it, below zero)." },
+    description: "Lengthens every model's fading trails, or cuts them below zero. Near the top they pile up into smoky echoes." },
   { kind: "number", key: "zoom", label: "Tunnel zoom", min: -1, max: 1, step: 0.01, default: 0, group: "Motion",
-    description: "Adds to every model's tunnel zoom: trails fly outward, or inward below zero." },
+    description: "Trails fly outward like flying through a tunnel, or inward below zero." },
   { kind: "number", key: "spin", label: "Tunnel spin", min: -90, max: 90, step: 1, default: 0, group: "Motion",
-    description: "Adds to every model's tunnel spin, degrees per second." },
-  { kind: "number", key: "size", label: "Size", min: 0.2, max: 4, step: 0.05, default: 1, group: "Size",
-    description: "Multiplies glow, grain and line sizes." },
+    description: "Trails turn round the centre, degrees per second. With zoom it makes a spiral." },
 ];
 
 export function defaultGlobals(): ParamValues {
@@ -72,51 +64,87 @@ export function sanitizeGlobals(saved: unknown): ParamValues {
   return values;
 }
 
-/** Scheme names some models call by another name. */
-const PALETTE_ALIASES: Record<string, string[]> = { fire: ["ember"], ice: ["ocean"] };
+const clamp = (spec: Extract<ParamSpec, { kind: "number" }>, v: number) => Math.min(spec.max, Math.max(spec.min, v));
 
 /**
- * Push the model's parameter values in `out` by the global controls in `g`.
- * Runs after macros and modulation, so the globals act on top of everything.
+ * Set the model's hidden parameters in `base` from the global controls in `g`,
+ * before macros and modulation push them: the global controls stand in for
+ * the sliders those parameters no longer have.
  */
-export function applyGlobals(def: ModelDefinition, g: ParamValues, out: ParamValues): void {
-  const gravity = g.gravity as number, energy = g.energy as number, size = g.size as number;
+export function setHidden(def: ModelDefinition, g: ParamValues, base: ParamValues): void {
   for (const spec of def.params) {
-    if (spec.resetOnChange) continue;
+    if (!spec.hidden) continue;
     const key = spec.key;
     if (spec.kind === "number") {
-      let v = out[key] as number;
-      const before = v;
-      if (spec.global === "gravity") v *= gravity;
-      else if (spec.global === "energy") v *= energy;
-      else if (spec.global === "size") v *= size;
-      if (key === "afterglow") v += (g.trails as number) * (spec.max - spec.min);
-      else if (key === "zoom") v += g.zoom as number;
-      else if (key === "spin") v += g.spin as number;
-      if (v === before) continue;
-      v = Math.min(spec.max, Math.max(spec.min, v));
-      if (spec.step >= 1) v = Math.round(v);
-      out[key] = v;
+      let v = spec.default;
+      if (spec.global === "gravity") v *= g.gravity as number;
+      else if (key === "afterglow") v += (g.trails as number) * (spec.max - spec.min);
+      else if (key === "zoom") v = g.zoom as number;
+      else if (key === "spin") v = g.spin as number;
+      base[key] = clamp(spec, v);
     } else if (spec.kind === "choice") {
-      let want: string | null = null;
+      let want = spec.default;
       if (key === "gravityMode" && g.gravityMode !== MODEL_OWN) want = g.gravityMode as string;
-      else if ((key === "colours" || key === "palette") && g.palette !== MODEL_OWN) want = g.palette as string;
-      if (want === null) continue;
-      const names = [want, ...(PALETTE_ALIASES[want] ?? [])];
-      const hit = names.find((n) => spec.options.some((o) => o.value === n));
-      if (hit) out[key] = hit;
+      else if (key === "colours") want = g.palette as string;
+      base[key] = spec.options.some((o) => o.value === want) ? want : spec.default;
+    } else {
+      base[key] = spec.default;
     }
   }
 }
 
-/** The CSS filter for the canvas, or "" when the colour controls are all neutral. */
-export function canvasFilter(g: ParamValues, beats: number): string {
-  const parts: string[] = [];
-  const hue = ((((g.hueShift as number) + (g.hueCycle as number) * beats) % 360) + 360) % 360;
-  if (hue > 0.5 && hue < 359.5) parts.push(`hue-rotate(${hue.toFixed(1)}deg)`);
-  if (g.saturation !== 1) parts.push(`saturate(${g.saturation})`);
-  if (g.brightness !== 1) parts.push(`brightness(${g.brightness})`);
-  if (g.contrast !== 1) parts.push(`contrast(${g.contrast})`);
-  if (g.invert) parts.push("invert(1)");
-  return parts.join(" ");
+/**
+ * Multiply the sliders tagged `global: "energy"` in `out` by the global
+ * Energy. Runs after macros and modulation, so it acts on top of everything.
+ */
+export function applyEnergy(def: ModelDefinition, g: ParamValues, out: ParamValues): void {
+  const energy = g.energy as number;
+  if (energy === 1) return;
+  for (const spec of def.params) {
+    if (spec.kind !== "number" || spec.global !== "energy" || spec.resetOnChange) continue;
+    let v = clamp(spec, (out[spec.key] as number) * energy);
+    if (spec.step >= 1) v = Math.round(v);
+    out[spec.key] = v;
+  }
+}
+
+/** What the colour controls do to the finished picture this frame. */
+export function gradeOf(g: ParamValues, beats: number): Grade {
+  return {
+    hue: (g.hueShift as number) + (g.hueCycle as number) * beats,
+    saturation: g.saturation as number,
+    brightness: g.brightness as number,
+    contrast: g.contrast as number,
+    invert: g.invert as boolean,
+  };
+}
+
+/** A named set of global control values. Keys left out keep their defaults. */
+export interface GlobalPreset {
+  name: string;
+  values: ParamValues;
+}
+
+export const BUILT_IN_PRESETS: GlobalPreset[] = [
+  { name: "Neutral", values: {} },
+  { name: "Neon tunnel", values: { palette: "rainbow", saturation: 1.8, contrast: 1.2, trails: 0.25, zoom: 0.35, spin: 20 } },
+  { name: "Inferno", values: { palette: "fire", contrast: 1.3, brightness: 1.1, energy: 1.6, gravityMode: "up", gravity: 1.5, trails: 0.15 } },
+  { name: "Deep freeze", values: { palette: "ice", saturation: 0.8, brightness: 0.9, energy: 0.5, trails: 0.35, gravityMode: "down", gravity: 0.6 } },
+  { name: "Daydream", values: { hueCycle: 10, saturation: 1.3, contrast: 0.8, energy: 0.7, trails: 0.5, zoom: 0.1, spin: -8 } },
+  { name: "Whirlpool", values: { palette: "rainbow", gravityMode: "swirl", gravity: 2, trails: 0.3, zoom: -0.2, spin: 35 } },
+  { name: "Deep sea", values: { palette: "bio", contrast: 1.2, energy: 0.8, trails: 0.3, gravityMode: "center", gravity: 0.6 } },
+  { name: "Noir", values: { saturation: 0, contrast: 1.6, brightness: 1.1, trails: 0.2 } },
+  { name: "Negative", values: { invert: true, hueShift: 180, saturation: 1.2 } },
+  { name: "Chaos", values: { hueCycle: 45, saturation: 1.6, energy: 3, trails: 0.15, zoom: 0.5, spin: 60 } },
+];
+
+/** The full set of values a preset stands for. */
+export function presetValues(p: GlobalPreset): ParamValues {
+  return sanitizeGlobals({ ...defaultGlobals(), ...p.values });
+}
+
+/** True when `values` are exactly what the preset sets. */
+export function matchesPreset(values: ParamValues, p: GlobalPreset): boolean {
+  const want = presetValues(p);
+  return GLOBAL_SPECS.every((s) => want[s.key] === values[s.key]);
 }

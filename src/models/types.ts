@@ -22,16 +22,20 @@ interface ParamCommon {
   /** Re-run `reset` when this parameter changes (e.g. particle count). */
   resetOnChange?: boolean;
   /**
-   * Which Global Control scales this number parameter, so one global knob
-   * moves the matching slider in every model: "gravity" for gravity-field
-   * strength, "energy" for how wild things move, "size" for glow and line
-   * sizes. Parameters keyed `gravityMode`, `colours`, `afterglow`, `zoom`
-   * and `spin` are picked up by key without a tag.
+   * Which Global Control drives this number parameter. "energy": the global
+   * Energy multiplies it on top of its slider. "gravity": it is the model's
+   * gravity-field strength, set by the global Gravity strength as a multiple
+   * of its default (mark it `hidden` too).
    */
-  global?: GlobalTag;
+  global?: "gravity" | "energy";
+  /**
+   * No control shows for it, because a Global Control covers it: the model
+   * keeps the value at its default, or the global sets it (gravity strength,
+   * and the keys `gravityMode`, `colours`, `afterglow`, `zoom` and `spin`).
+   * Macros can still push it.
+   */
+  hidden?: boolean;
 }
-
-export type GlobalTag = "gravity" | "energy" | "size";
 
 export type ParamSpec = ParamCommon &
   (
