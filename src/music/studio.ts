@@ -1685,13 +1685,28 @@ export class Studio {
       };
       amount.addEventListener("input", () => setAmount(Number(amount.value)));
       amount.addEventListener("dblclick", () => { amount.value = "0"; setAmount(0); });
+      const roll = diceButton("Roll a random slider and amount for this route; the sound stays");
+      roll.addEventListener("click", () => {
+        // A different slider when there is one, pushed a clear amount either way.
+        // Half the rolls land on the model's own sliders, the rest on macros or
+        // global controls, so the long global list doesn't crowd them out.
+        const others = targets.filter((t) => t.id !== route.target);
+        const kind = (id: string) => (id.startsWith("macro:") ? "macro" : id.startsWith("global:") ? "global" : "param");
+        const r = Math.random();
+        const want = r < 0.5 ? "param" : r < 0.75 ? "macro" : "global";
+        const pool = [others.filter((t) => kind(t.id) === want), others, targets].find((p) => p.length)!;
+        route.target = pool[Math.floor(Math.random() * pool.length)].id;
+        route.amount = randomStep(0.25, 1, 0.05) * (Math.random() < 0.5 ? -1 : 1);
+        this.routesChanged();
+        this.renderRoutes();
+      });
       const remove = el("button", { type: "button", textContent: "×", className: "small", title: "Remove route" });
       remove.addEventListener("click", () => {
         this.modelSettings.routes.splice(i, 1);
         this.routesChanged();
         this.renderRoutes();
       });
-      const row = el("div", { className: `route${route.off ? " off" : ""}` }, on, source, meter, el("span", { className: "muted", textContent: "→" }), target, amount, readout, remove);
+      const row = el("div", { className: `route${route.off ? " off" : ""}` }, on, source, meter, el("span", { className: "muted", textContent: "→" }), target, amount, readout, roll, remove);
       on.addEventListener("change", () => {
         route.off = !on.checked || undefined;
         row.classList.toggle("off", !on.checked);
@@ -1740,13 +1755,20 @@ export class Studio {
       };
       amount.addEventListener("input", () => setAmount(Number(amount.value)));
       amount.addEventListener("dblclick", () => { amount.value = "1"; setAmount(1); });
+      const roll = diceButton("Roll a random strength for this reaction");
+      roll.addEventListener("click", () => {
+        const v = randomStep(0.25, 2, 0.05);
+        amount.value = String(v);
+        setAmount(v);
+        roll.blur();
+      });
       const remove = el("button", { type: "button", textContent: "×", className: "small", title: "Remove this reaction (Restore built-ins brings it back)" });
       remove.addEventListener("click", () => {
         rows.splice(rows.indexOf(row), 1);
         this.saveModel();
         this.renderRoutes();
       });
-      const r = el("div", { className: `route reaction-row${row.off ? " off" : ""}`, title: spec.text }, on, source, meter, el("span", { className: "muted", textContent: "→" }), target, amount, readout, remove);
+      const r = el("div", { className: `route reaction-row${row.off ? " off" : ""}`, title: spec.text }, on, source, meter, el("span", { className: "muted", textContent: "→" }), target, amount, readout, roll, remove);
       on.addEventListener("change", () => {
         row.off = !on.checked || undefined;
         r.classList.toggle("off", !on.checked);
@@ -1825,6 +1847,23 @@ function savedReactions(def: ModelDefinition, saved: SavedModelSettings): Reacti
     amount: typeof r.amount === "number" && Number.isFinite(r.amount) ? Math.min(2, Math.max(0, r.amount)) : 1,
     ...(r.off ? { off: true } : {}),
   }));
+}
+
+const DICE_ICON =
+  '<svg viewBox="0 0 14 14" aria-hidden="true"><rect x="1.5" y="1.5" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><g fill="currentColor"><circle cx="4.6" cy="4.6" r="1.1"/><circle cx="7" cy="7" r="1.1"/><circle cx="9.4" cy="9.4" r="1.1"/></g></svg>';
+
+/** The small die on a matrix row that rerolls just that row. */
+function diceButton(title: string): HTMLButtonElement {
+  const b = el("button", { type: "button", className: "small dice", title });
+  b.innerHTML = DICE_ICON;
+  b.setAttribute("aria-label", title);
+  return b;
+}
+
+/** A random value from min to max on the given step. */
+function randomStep(min: number, max: number, step: number): number {
+  const steps = Math.round((max - min) / step);
+  return Number((min + Math.floor(Math.random() * (steps + 1)) * step).toFixed(6));
 }
 
 function formatAmount(v: number): string {
