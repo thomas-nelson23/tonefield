@@ -65,6 +65,9 @@ type SavedModelSettings = ModelSettings & { muted?: ReactionSource[] };
 /** The global controls a route can push. */
 const GLOBAL_NUMBERS = GLOBAL_SPECS.filter((p): p is NumberSpec => p.kind === "number");
 
+/** Seconds between redraws of the live meters, playheads and modulation bars: about 20 a second. */
+const UI_INTERVAL = 0.04;
+
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const choices = (rec: Record<string, { label: string }>) => Object.entries(rec).map(([value, o]) => ({ value, label: o.label }));
 const signed = (v: number, unit: string) => `${v > 0 ? "+" : ""}${v}${unit}`;
@@ -245,6 +248,15 @@ const REACTION_METERS: Record<ReactionSource, string> = {
   level: "level", bass: "bass", mid: "mid", treble: "treble", spectrum: "level", beat: "lfoBeat",
 };
 
+/** Show a 0..1 level on a horizontal meter, touching the DOM only when it moves a visible step. */
+const meterLevels = new WeakMap<HTMLElement, number>();
+function setMeter(bar: HTMLElement, level: number): void {
+  const v = Math.round(Math.min(1, level) * 100) / 100;
+  if (meterLevels.get(bar) === v) return;
+  meterLevels.set(bar, v);
+  bar.style.transform = `scaleX(${v})`;
+}
+
 function load<T>(key: string): T | null {
   try {
     const raw = localStorage.getItem(key);
@@ -318,6 +330,9 @@ export class Studio {
   /** The music feed handed to the model each frame; reused to avoid garbage. */
   private feed: MusicFrame = { ...SILENT_MUSIC, spectrum: new Float32Array(SILENT_MUSIC.spectrum.length), wave: new Float32Array(SILENT_MUSIC.wave.length) };
   private beatsNow = 0;
+  /** When the live meters and modulation bars last redrew (see UI_INTERVAL), and whether this frame is one of those. */
+  private uiAt = -1;
+  private uiDue = true;
   private lastTone = { hue: 210, pitch: 0.5 };
   private chordHue = 210;
 
@@ -434,8 +449,16 @@ export class Studio {
     }
     this.beatsNow = this.seq.beats(nowSeconds);
     this.sources.update(dt, this.beatsNow, bands);
-    this.drawSequencer();
-    this.updateMeters();
+    // The meters and modulation bars only redraw every few frames. Each redraw
+    // makes the webview repaint the panels around them on the CPU, and doing
+    // that every frame cut the frame rate by more than half while music played.
+    const sinceUi = nowSeconds - this.uiAt;
+    this.uiDue = sinceUi >= UI_INTERVAL || sinceUi < 0;
+    if (this.uiDue) {
+      this.drawSequencer(Math.min(sinceUi, 0.25));
+      this.updateMeters();
+      this.uiAt = nowSeconds;
+    }
     return events;
   }
 
@@ -521,9 +544,11 @@ export class Studio {
     setHidden(this.def, g, this.base);
     applyModulation(this.def, this.base, this.modelSettings.macros, this.modelSettings.routes, this.sources, out, this.macroOut, depth);
     applyEnergy(this.def, g, out);
-    this.paramControls?.showModulation(out);
-    this.macroControls?.showModulation(this.macroOut);
-    this.globalControls?.showModulation(g);
+    if (this.uiDue) {
+      this.paramControls?.showModulation(out);
+      this.macroControls?.showModulation(this.macroOut);
+      this.globalControls?.showModulation(g);
+    }
   }
 
   // ---- MIDI ---------------------------------------------------------------
@@ -1258,14 +1283,14 @@ export class Studio {
   }
 
   /** Redraw the meters and the open track's views while the sequencer tab is showing. */
-  private drawSequencer(): void {
+  private drawSequencer(elapsed: number): void {
     if (!this.seqTab || this.seqTab.hidden || $("dock").classList.contains("collapsed")) return;
     const peaks = this.audio.peaks();
     for (const m of this.stripMeters) {
       // -48 dB to +6 dB fills the meter; it jumps up and falls back gently.
       const p = peaks[m.key];
       const h = p > 0 ? Math.max(0, (20 * Math.log10(p) + 48) / 54) : 0;
-      m.level = h > m.level ? h : Math.max(h, m.level - 0.025);
+      m.level = h > m.level ? h : Math.max(h, m.level - 1.5 * elapsed);
       m.dial.meter(m.level);
     }
     const track = this.settings.mixerTrack;
@@ -1424,10 +1449,10 @@ export class Studio {
 
   private updateMeters(): void {
     if ($("dock").classList.contains("collapsed")) return;
-    for (const k in this.meterBars) this.meterBars[k].style.width = `${this.sources.get(k) * 100}%`;
+    for (const k in this.meterBars) setMeter(this.meterBars[k], this.sources.get(k));
     for (const m of this.sourceMeters) {
       if (!m.bar.isConnected || m.bar.offsetParent === null) continue;
-      m.bar.style.width = `${Math.min(1, Math.abs(this.sources.get(m.source()))) * 100}%`;
+      setMeter(m.bar, Math.abs(this.sources.get(m.source())));
     }
   }
 
