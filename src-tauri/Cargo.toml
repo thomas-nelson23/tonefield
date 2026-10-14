@@ -1,6 +1,6 @@
 [package]
 name = "tonefield"
-version = "0.1.0"
+version = "0.2.0"
 description = "Interactive physics and algorithm visualizer"
 edition = "2021"
 
@@ -16,8 +16,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 midir = "0.10"
+serde_json = "1"
+# Update checks and downloads from GitHub Releases (rustls, so no OpenSSL dependency)
+ureq = "2"
 
-# A smaller binary. The app's Rust side only forwards MIDI, so it gives up no
+# A smaller binary. The app's Rust side only forwards MIDI and fetches updates, so it gives up no
 # speed that matters; panics still unwind, as before.
 [profile.release]
 codegen-units = 1

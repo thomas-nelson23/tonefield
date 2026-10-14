@@ -125,6 +125,19 @@ The installer isn't code-signed, so Windows SmartScreen says "Windows protected 
 
 To build it yourself on Windows, install Node, Rust (via rustup, with the MSVC toolchain) and the Visual Studio C++ Build Tools ([Tauri's Windows prerequisites](https://tauri.app/start/prerequisites/#windows)), then run `npm install` and `npm run tauri build -- --bundles nsis`. The installer lands in `src-tauri/target/release/bundle/nsis/`.
 
+## Updates
+
+The **Update** button in the bottom bar checks this repo's [GitHub releases](https://github.com/thomas-nelson23/tonefield/releases) (quietly at every launch, and whenever you click it) and lights green when a newer version is out. Clicking it shows the release notes and installs the right file for how you installed Tonefield:
+
+- **pacman package** (Arch, CachyOS): downloads the release's `.pkg.tar.zst` and runs `pacman -U` behind your desktop's password prompt (pkexec).
+- **.deb** (Debian, Ubuntu): the same with `apt-get install`.
+- **AppImage**: swaps the new AppImage in place.
+- **Windows**: runs the new setup `.exe` in passive mode, which reopens Tonefield when it's done.
+- **macOS**: opens the new disk image to drag into Applications.
+- **Anything else** (dev builds, `npm run tauri dev`): links to the release page.
+
+Releasing is a version bump: `npm run bump 0.3.0` sets the version in every file that carries it, and when that lands on `main`, CI builds every platform and publishes them as release `v0.3.0`. Pushes that keep the version publish nothing.
+
 ## Adding a model
 
 Every model implements `SimulationModel` from [`src/models/types.ts`](src/models/types.ts). The host app owns the canvas, the fixed-timestep loop, the parameter sliders and pointer routing, so a model only describes its parameters and implements `reset`, `step` and `render` (plus optional `onPointer`, `onNote`, `resize` and `stats`).
@@ -190,5 +203,7 @@ src/
     modulation.ts    modulation sources and how they combine with sliders and macros
     midi.ts          MIDI input (Tauri events, or Web MIDI in a browser)
   ui/controls.ts     builds parameter controls from a model's spec
-src-tauri/           Rust/Tauri desktop shell, bundle config and MIDI input
+  ui/updater.ts      the Update button and its popup
+src-tauri/           Rust/Tauri desktop shell, bundle config, MIDI input and updates (src/update.rs)
+scripts/bump-version.mjs  sets the version everywhere for a release
 ```

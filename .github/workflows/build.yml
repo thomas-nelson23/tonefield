@@ -39,6 +39,7 @@ jobs:
           workspaces: src-tauri
 
       - run: npm ci
+      - run: npm run bump -- --check
       - run: npm run typecheck
       - run: npx tauri build --bundles ${{ matrix.bundles }}
 
@@ -76,3 +77,50 @@ jobs:
         with:
           name: tonefield-arch
           path: packaging/arch/tonefield-*.pkg.tar.zst
+
+  release:
+    # Merging a version bump into main (npm run bump <version>) publishes the
+    # builds above as a GitHub release, which the app's Update button offers to
+    # older copies. Pull requests only list what would be published.
+    needs: [build, arch]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find the version
+        id: version
+        run: |
+          tag="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "$tag is already released"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: steps.version.outputs.exists != 'true'
+        with:
+          path: artifacts
+
+      - name: Publish the release
+        if: steps.version.outputs.exists != 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          shopt -s globstar nullglob
+          files=(artifacts/**/*.dmg artifacts/**/*.deb artifacts/**/*.AppImage artifacts/**/*-setup.exe artifacts/**/*.pkg.tar.zst)
+          printf 'Release file: %s\n' "${files[@]}"
+          # One of each kind the app looks for, or the Update button can't help someone
+          for kind in .dmg .deb .AppImage -setup.exe .pkg.tar.zst; do
+            printf '%s\n' "${files[@]}" | grep -q -- "$kind\$" || { echo "No $kind file was built"; exit 1; }
+          done
+          if [ "$PUBLISH" = true ]; then
+            gh release create "$TAG" "${files[@]}" --title "Tonefield ${TAG#v}" --generate-notes --target "$GITHUB_SHA"
+          else
+            echo "Not on main, so $TAG isn't published"
+          fi
