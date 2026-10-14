@@ -213,8 +213,10 @@
         <span id="stats"></span>
         <span class="spacer"></span>
         <span class="status-hint">Space play/pause · R reset · Enter sequencer · S sidebar</span>
+        <button type="button" id="update-button" class="bar-toggle" title="Check for updates" hidden><span class="led"></span>Update</button>
         <button type="button" id="sidebar-toggle" class="bar-toggle on" title="Hide the sidebar (S)"><span class="led"></span>Sidebar</button>
       </footer>
+      <div id="update-pop" role="dialog" aria-label="Update" hidden></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

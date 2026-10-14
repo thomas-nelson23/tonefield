@@ -238,6 +238,29 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
 .bar-toggle.on .led { background: var(--accent); box-shadow: var(--glow) var(--accent); }
 .bar-toggle.on { color: var(--strong); }
 #stats { padding-left: 4px; }
+/* Lit when a newer version is out. */
+#update-button.on .led { background: var(--ok); box-shadow: var(--glow) var(--ok); }
+
+/* The update popup, above the bottom bar's right end. */
+#update-pop {
+  position: fixed; right: 8px; bottom: 36px; z-index: 50;
+  width: 360px; padding: 12px 14px;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--edge); border-radius: var(--radius);
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.35);
+  user-select: text;
+}
+#update-pop[hidden] { display: none; }
+#update-pop h3 { margin: 0; font-size: 13px; color: var(--strong); }
+#update-pop p { margin: 6px 0 0; line-height: 1.45; }
+#update-pop .row-buttons { margin-top: 10px; }
+.update-notes {
+  margin-top: 8px; max-height: 180px; overflow-y: auto;
+  padding: 6px 8px; background: var(--field); border-radius: var(--radius-sm);
+  white-space: pre-wrap; line-height: 1.45; color: var(--muted);
+}
+.update-progress { margin-top: 10px; height: 6px; border-radius: var(--radius-pill); background: var(--track); overflow: hidden; }
+.update-progress span { display: block; height: 100%; width: 0; background: var(--accent); transition: width var(--ease); }
 
 /* ---- Panels (right-hand column) ---- */
 

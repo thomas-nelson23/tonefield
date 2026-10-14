@@ -3,6 +3,7 @@ import { defaultParams, SILENT_MUSIC, type ModelDefinition, type MusicFrame, typ
 import { renderParamControls, type ParamControls } from "./ui/controls";
 import { setupPanels, setupRangeFill, setupSidebarToggle } from "./ui/panels";
 import { ColourGrade } from "./ui/grade";
+import { setupUpdater } from "./ui/updater";
 import { Studio } from "./music/studio";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -266,5 +267,6 @@ try {
 loadModel(initial);
 setRunning(true);
 setupRangeFill();
+setupUpdater();
 new ResizeObserver(resize).observe(stage);
 requestAnimationFrame(frame);

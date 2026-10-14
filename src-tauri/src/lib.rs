@@ -1,4 +1,5 @@
 mod midi;
+mod update;
 
 use std::time::Duration;
 
@@ -23,6 +24,10 @@ pub fn run() {
             midi::midi_inputs,
             midi::midi_connect,
             midi::midi_disconnect,
+            update::update_check,
+            update::update_install,
+            update::update_restart,
+            update::update_open_page,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tonefield");
