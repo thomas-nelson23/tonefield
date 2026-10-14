@@ -78,6 +78,7 @@
         </div>
         <div id="stage">
           <canvas id="canvas"></canvas>
+          <canvas id="canvas-gl" hidden></canvas>
         </div>
         <section id="dock">
           <nav id="dock-tabs">
@@ -228,6 +229,7 @@
         <button type="button" id="dock-toggle" class="bar-toggle on" title="Hide the music panel"><span class="led"></span>Music</button>
         <span id="stats"></span>
         <label class="bar-select" title="How many pixels the picture is drawn at. Fewer pixels means more frames a second on a big screen; Auto lowers it only while the frame rate drops under 55.">Resolution <select id="render-scale"></select></label>
+        <label class="bar-select" title="What draws the picture. GPU draws with WebGL on the graphics card; CPU is the older Canvas 2D drawing, kept in case the GPU way misbehaves on a machine.">Drawing <select id="draw-mode"><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
         <span class="spacer"></span>
         <span class="status-hint">Space play/pause · R reset · Enter sequencer · S sidebar</span>
         <button type="button" id="update-button" class="bar-toggle" title="Check for updates" hidden><span class="led"></span>Update</button>

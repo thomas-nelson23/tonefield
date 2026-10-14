@@ -1,3 +1,4 @@
+import { type Gfx } from "../gl/gfx";
 import { jitterScale, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { Feedback, applyFeedback, colourParam, feedbackParams, hueToward, schemeHue } from "./lib/visual";
 import { gravityTo, gravityModeParam, isUniform } from "./lib/gravity";
@@ -336,15 +337,37 @@ class CymaticsSim implements SimulationModel {
     this.pointer = input.pressed && input.type !== "up" ? { x: input.x, y: input.y } : null;
   }
 
-  render(g: CanvasRenderingContext2D, view: Viewport, p: ParamValues, m: MusicFrame): void {
-    applyFeedback(this.fb, g, view, p, this.stepped);
+  render(g: CanvasRenderingContext2D, _view: Viewport, p: ParamValues, m: MusicFrame): void {
+    applyFeedback(this.fb, g, _view, p, this.stepped);
     this.stepped = false;
     const [ox, oy, pw, ph] = this.plate();
-    // Settled sand on the still lines glows in the main colour; sand still bouncing glows a second colour.
-    // Grains are written straight into a pixel buffer the size of the plate: thousands of tiny
-    // rectangles are slow to fill in software-rendered webviews, one image blit is not.
-    // Device pixels on high-DPI screens, so grains stay sharp, up to a size that stays cheap to clear and blit.
-    const scale = Math.min(g.getTransform().a || 1, Math.sqrt(MAX_PIXELS / (pw * ph)));
+    const raster = this.paintSand(g.getTransform().a || 1, p, m);
+    g.globalCompositeOperation = "lighter";
+    raster.draw(g, pw, ph, false, ox, oy);
+    g.globalCompositeOperation = "source-over";
+  }
+
+  /** The same picture as `render`, drawn on the GPU. */
+  renderGL(gfx: Gfx, _view: Viewport, p: ParamValues, m: MusicFrame): void {
+    gfx.feedback(p.afterglow as number, p.zoom as number, p.spin as number, this.stepped);
+    this.stepped = false;
+    const [ox, oy, pw, ph] = this.plate();
+    const raster = this.paintSand(gfx.scale, p, m);
+    gfx.upload("sand", raster.pixels, raster.width, raster.height, false);
+    gfx.blend("add");
+    gfx.image("sand", ox, oy, pw, ph);
+    gfx.blend("normal");
+  }
+
+  /**
+   * Settled sand on the still lines glows in the main colour; sand still bouncing glows a second colour.
+   * Grains are written straight into a pixel buffer the size of the plate: thousands of tiny
+   * rectangles are slow to fill in software-rendered webviews, one image blit is not.
+   * Device pixels (`dpr` per CSS pixel) on high-DPI screens, so grains stay sharp, up to a size that stays cheap to clear and blit.
+   */
+  private paintSand(dpr: number, p: ParamValues, m: MusicFrame): Raster {
+    const [, , pw, ph] = this.plate();
+    const scale = Math.min(dpr, Math.sqrt(MAX_PIXELS / (pw * ph)));
     const sizeX = Math.max(1, Math.round(pw * scale)), sizeY = Math.max(1, Math.round(ph * scale));
     if (!this.raster || this.raster.width !== sizeX || this.raster.height !== sizeY) this.raster = new Raster(sizeX, sizeY);
     const px = this.raster.pixels;
@@ -372,10 +395,9 @@ class CymaticsSim implements SimulationModel {
         }
       }
     }
-    g.globalCompositeOperation = "lighter";
-    this.raster.draw(g, pw, ph, false, ox, oy);
-    g.globalCompositeOperation = "source-over";
+    return this.raster;
   }
+
 
   /** A packed pixel for `lighter` blending: the colour pre-scaled by its opacity. */
   private colour(h: number, sat: number, light: number, alpha: number): number {

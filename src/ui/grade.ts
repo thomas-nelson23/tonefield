@@ -25,22 +25,36 @@ void main() {
 
 // The same steps, in the same order, as the CSS filter the controls used to build:
 // hue-rotate, saturate, brightness, contrast, invert (matrices from the Filter Effects spec).
-const FRAGMENT = `
-precision mediump float;
-varying vec2 uv;
-uniform sampler2D image;
+// Shared with the GPU drawing in src/gl/gfx.ts, which grades as it shows each frame.
+export const GRADE_GLSL = `
 uniform mat3 hue;
 uniform float saturation, brightness, contrast, invert;
-void main() {
-  vec4 c = texture2D(image, uv);
-  vec3 rgb = clamp(hue * c.rgb, 0.0, 1.0);
+vec3 grade(vec3 c) {
+  vec3 rgb = clamp(hue * c, 0.0, 1.0);
   float luma = dot(rgb, vec3(0.213, 0.715, 0.072));
   rgb = clamp(mix(vec3(luma), rgb, saturation), 0.0, 1.0);
   rgb = clamp(rgb * brightness, 0.0, 1.0);
   rgb = clamp((rgb - 0.5) * contrast + 0.5, 0.0, 1.0);
-  rgb = mix(rgb, 1.0 - rgb, invert);
-  gl_FragColor = vec4(rgb, 1.0);
+  return mix(rgb, 1.0 - rgb, invert);
 }`;
+
+const FRAGMENT = `
+precision mediump float;
+varying vec2 uv;
+uniform sampler2D image;
+${GRADE_GLSL}
+void main() {
+  gl_FragColor = vec4(grade(texture2D(image, uv).rgb), 1.0);
+}`;
+
+/** Set the uniforms `GRADE_GLSL` declares. */
+export function gradeUniforms(gl: WebGLRenderingContext | WebGL2RenderingContext, u: Record<string, WebGLUniformLocation | null>, grade: Grade): void {
+  gl.uniformMatrix3fv(u.hue, false, hueMatrix(grade.hue));
+  gl.uniform1f(u.saturation, grade.saturation);
+  gl.uniform1f(u.brightness, grade.brightness);
+  gl.uniform1f(u.contrast, grade.contrast);
+  gl.uniform1f(u.invert, grade.invert ? 1 : 0);
+}
 
 function hueMatrix(deg: number): Float32Array {
   const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
@@ -198,12 +212,7 @@ export class ColourGrade {
       out.style.height = src.style.height;
     }
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
-    const u = this.uniforms;
-    gl.uniformMatrix3fv(u.hue, false, hueMatrix(grade.hue));
-    gl.uniform1f(u.saturation, grade.saturation);
-    gl.uniform1f(u.brightness, grade.brightness);
-    gl.uniform1f(u.contrast, grade.contrast);
-    gl.uniform1f(u.invert, grade.invert ? 1 : 0);
+    gradeUniforms(gl, this.uniforms, grade);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return true;
   }

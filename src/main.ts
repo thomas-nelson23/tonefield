@@ -2,7 +2,8 @@ import { models, findModel } from "./models/registry";
 import { defaultParams, SILENT_MUSIC, type ModelDefinition, type MusicFrame, type ParamSpec, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./models/types";
 import { renderParamControls, type ParamControls } from "./ui/controls";
 import { setupPanels, setupRangeFill, setupSidebarToggle } from "./ui/panels";
-import { ColourGrade } from "./ui/grade";
+import { ColourGrade, type Grade } from "./ui/grade";
+import { Gfx } from "./gl/gfx";
 import { setupUpdater } from "./ui/updater";
 import { Studio } from "./music/studio";
 
@@ -23,6 +24,8 @@ const randomizeBtn = $<HTMLButtonElement>("randomize");
 const docTitle = $<HTMLElement>("doc-title");
 const docState = $<HTMLElement>("doc-state");
 const scaleSelect = $<HTMLSelectElement>("render-scale");
+const drawSelect = $<HTMLSelectElement>("draw-mode");
+const glCanvas = $<HTMLCanvasElement>("canvas-gl");
 
 /**
  * Most simulation steps in one frame. A frame that took longer than this many
@@ -79,6 +82,77 @@ const auto = { frames: 0, ms: 0, since: 0, steady: 0, raiseWait: 3, raisedAt: -I
 const studio = new Studio();
 const grade = new ColourGrade(canvas);
 
+/**
+ * GPU drawing: models with a `renderGL` draw with WebGL on their own canvas
+ * when the Drawing setting is GPU, which it is unless the user picked CPU.
+ * Made the first time it's needed; null where WebGL 2 is missing, and dropped
+ * for good if the GPU loses the context, so the app carries on on the CPU.
+ */
+type DrawMode = "gpu" | "cpu";
+let drawMode: DrawMode = "gpu";
+let gfx: Gfx | null = null;
+let gfxTried = false;
+/** The model is drawing with `gfx` now. */
+let onGpu = false;
+/** The grade last shown on the GPU canvas, so an unchanged frame isn't shown again. */
+let gpuGrade = "";
+const NEUTRAL_GRADE: Grade = { hue: 0, saturation: 1, brightness: 1, contrast: 1, invert: false };
+
+glCanvas.addEventListener("webglcontextlost", (e) => {
+  e.preventDefault();
+  console.warn("WebGL context lost; drawing on the CPU from now on.");
+  gfx = null;
+  useDrawing();
+});
+
+/** Pick the canvas the current model draws on, and show only that one. */
+function useDrawing(): void {
+  if (drawMode === "gpu" && !gfxTried) {
+    gfxTried = true;
+    gfx = Gfx.create(glCanvas);
+    if (gfx) sizeGfx();
+  }
+  const gpu = drawMode === "gpu" && !!gfx && !!model?.renderGL;
+  if (gpu !== onGpu) {
+    onGpu = gpu;
+    // The 2D canvas's colour overlay goes too, and comes back on its next frame.
+    if (gpu) grade.draw(NEUTRAL_GRADE, true);
+    canvas.hidden = gpu;
+    glCanvas.hidden = !gpu;
+  }
+  if (gpu) clearGfx();
+  gpuGrade = "";
+  dirty = true;
+}
+
+function clearGfx(): void {
+  if (!gfx) return;
+  gfx.begin();
+  gfx.clear();
+  gfx.flush();
+}
+
+function sizeGfx(): void {
+  if (!gfx) return;
+  const dpr = (window.devicePixelRatio || 1) * renderScale;
+  glCanvas.width = canvas.width;
+  glCanvas.height = canvas.height;
+  glCanvas.style.width = canvas.style.width;
+  glCanvas.style.height = canvas.style.height;
+  gfx.resize(canvas.width, canvas.height, dpr);
+}
+
+function setDrawMode(mode: DrawMode): void {
+  drawMode = mode;
+  drawSelect.value = mode;
+  useDrawing();
+  try {
+    localStorage.setItem("ui:drawMode", mode);
+  } catch {
+    // Only a convenience.
+  }
+}
+
 // ---- Model selection -------------------------------------------------------
 
 function populateModelSelect(): void {
@@ -112,6 +186,7 @@ function loadModel(id: string): void {
   // Models that paint their own background would otherwise fade in over the previous one.
   g.fillStyle = "#0d1117";
   g.fillRect(0, 0, view.width, view.height);
+  useDrawing();
   description.textContent = def.description;
   docTitle.textContent = def.name;
   hint.textContent = def.hint ?? "No canvas interaction for this model.";
@@ -176,6 +251,8 @@ function resize(): void {
   canvas.style.width = `${view.width}px`;
   canvas.style.height = `${view.height}px`;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  sizeGfx();
+  gpuGrade = "";
   dirty = true;
   if (!model || !changed) return;
   if (model.resize) model.resize(view);
@@ -254,7 +331,7 @@ function autoScale(frameMs: number): void {
 
 function sendPointer(type: PointerInput["type"], e: PointerEvent): void {
   if (!running && type === "move" && e.buttons === 0) return;
-  const rect = canvas.getBoundingClientRect();
+  const rect = stage.getBoundingClientRect();
   model.onPointer?.(
     {
       type,
@@ -308,6 +385,10 @@ scaleSelect.addEventListener("change", () => {
   setScaleMode(scaleSelect.value as ScaleMode);
   scaleSelect.blur();
 });
+drawSelect.addEventListener("change", () => {
+  setDrawMode(drawSelect.value as DrawMode);
+  drawSelect.blur();
+});
 select.addEventListener("change", () => loadModel(select.value));
 randomizeBtn.addEventListener("click", () => {
   randomizeParams();
@@ -359,7 +440,22 @@ function frame(now: number): void {
 
   // Nothing moved (paused, or a screen refreshing faster than the model steps):
   // drawing again would only stack the models' additive strokes up on an unfaded picture.
-  if (dirty) {
+  if (onGpu && gfx) {
+    const look = studio.grade();
+    const key = `${look.hue}|${look.saturation}|${look.brightness}|${look.contrast}|${look.invert}`;
+    if (dirty) {
+      dirty = false;
+      const drawStart = performance.now();
+      gfx.begin();
+      if (!def.paintsBackground) gfx.clear();
+      model.renderGL!(gfx, view, effective, music);
+      gfx.show(look);
+      drawMs += (performance.now() - drawStart - drawMs) * 0.1;
+    } else if (key !== gpuGrade) {
+      gfx.show(look);
+    }
+    gpuGrade = key;
+  } else if (dirty) {
     dirty = false;
     const drawStart = performance.now();
     if (!def.paintsBackground) {
@@ -378,8 +474,8 @@ function frame(now: number): void {
     statsShown = now;
     const extra = model.stats?.();
     const scale = renderScale < 1 ? ` · drawn at ${Math.round(renderScale * 100)}%` : "";
-    statsEl.textContent = `${Math.round(fps)} fps${scale} · sim ${simMs.toFixed(1)} ms · draw ${drawMs.toFixed(1)} ms${extra ? ` · ${extra}` : ""}`;
-    (window as unknown as { __perf: unknown }).__perf = { fps, simMs, drawMs, renderScale, model: def.id };
+    statsEl.textContent = `${Math.round(fps)} fps · ${onGpu ? "GPU" : "CPU"}${scale} · sim ${simMs.toFixed(1)} ms · draw ${drawMs.toFixed(1)} ms${extra ? ` · ${extra}` : ""}`;
+    (window as unknown as { __perf: unknown }).__perf = { fps, simMs, drawMs, renderScale, model: def.id, gpu: onGpu };
   }
   requestAnimationFrame(frame);
 }
@@ -404,6 +500,16 @@ for (const [value, label] of Object.entries(SCALE_LABELS)) {
     // Auto it is.
   }
   setScaleMode(mode);
+}
+{
+  let mode: DrawMode = "gpu";
+  try {
+    if (localStorage.getItem("ui:drawMode") === "cpu") mode = "cpu";
+  } catch {
+    // GPU it is.
+  }
+  drawMode = mode;
+  drawSelect.value = mode;
 }
 resize();
 let initial = models[0].id;
