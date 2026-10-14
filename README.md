@@ -30,11 +30,12 @@ The panel under the canvas has four tabs.
   - **Global**: tempo, style (broken beat, four on the floor, half-time, ambient), swing, scale and root, plus synth sound, volume, **New idea** (fresh patterns and progression), **Fill** and **Hold** (freeze everything).
   - **Drums**: a euclidean sequencer drawn as three rings (kick inside, snare, hats outside). Each track's **Density** sets how many hits are spread evenly round the bar and **Variation** how much each bar strays with ghost notes, dropped hits and nudges (hits landing a hair early or late). **Steps** sets how many sixteenths the pattern has, **Offset** turns it round and **Reset** brings it back to its start every so many bars. Drag a ring round to turn its pattern; double-click to put it back. Picking a global style resets the rings to that style's beat.
   - **Bass**: a style (root pulse, off-beat, octave bounce, syncopated, walking, drone), **Density**, **Range** (root only, then octave, fifth, chord tones and passing notes) and **Variation**. It follows the chords.
-  - **Chords**: jazz, pop, dance or epic, each cycling through progressions typical of the style. **Change every** sets how long each chord lasts, **Variation** switches progressions and swaps in style-typical substitutes (tritone subs, relative chords, sus and added notes), and **Rhythm density** and **Rhythm variation** shape the comping. Epic is the wildcard: cinematic progressions with chromatic jumps and power chords, doubled an octave each side, and now and then it lifts the whole song up a step for a pass.
+  - **Chords**: jazz, pop, dance or epic, each cycling through progressions typical of the style. **Change every** sets how long each chord lasts, **Variation** switches progressions and swaps in style-typical substitutes (tritone subs, relative chords, sus and added notes), **Rhythm density** and **Rhythm variation** shape the comping, and **Déjà vu** (from Mutable Instruments' Marbles) decides how often a variation comes back instead of a new one, up to locking the varied progression into a loop. Epic is the wildcard: cinematic progressions with chromatic jumps and power chords, doubled an octave each side, and now and then it lifts the whole song up a step for a pass.
   - **Melody**: a style (wander, arpeggio, motif, lyrical), **Range**, **Density**, and **Groove**, which adds syncopation, clips notes shorter and makes the second half of the bar answer the first. Strong beats lean on chord tones.
-  Every part has a switch to mute it, and every control can be mapped to a MIDI knob. It plays through a small built-in synth (or silently, with Sound off) and sends every hit, bass note and chord to the current model.
+  - **Sound**: bass, chords and melody each play a voice ported from Mutable Instruments' Plaits, with its eight pitched engines (virtual analog, waveshaper, FM, grain formant, additive, string machine, plucked string, modal resonator), its Harmonics, Timbre and Morph controls, envelope amounts on Timbre and Morph, and its low-pass gate (Decay and Colour). Chords add Plaits' continuous **Inversion** sweep, a **Strum**, Attack and a tempo-synced Wobble; bass adds a Sub sine and Glide. The voices run in an AudioWorklet, off the main thread.
+  Every part has a switch to mute it, and every control can be mapped to a MIDI knob. It plays through the drum kit and the Plaits voices (or silently, with Sound off) and sends every hit, bass note and chord to the current model.
 - **Modulation**: routes that let a music source push a slider. Sources are note envelopes (any note, kick, snare, hat, melody), last velocity and pitch, held MIDI notes, tempo-synced LFOs, audio levels (overall, bass, mids, treble), the mod wheel, pitch bend and any MIDI CC. Targets are the model's number sliders and its macros. A coloured bar under a slider shows how far it's being pushed.
-- **MIDI**: pick input devices, play notes through the synth, and map knobs with MIDI learn (click MIDI learn, click a slider or macro, turn a knob). Macro and sequencer mappings carry across models, so a knob can ride a drum track's density or the chord speed live.
+- **MIDI**: pick input devices, play notes through the melody's Plaits voice, and map knobs with MIDI learn (click MIDI learn, click a slider or macro, turn a knob). Macro and sequencer mappings carry across models, so a knob can ride a drum track's density or the chord speed live.
 - **Audio file**: play a song; its levels become modulation sources and its kick drums trigger note reactions.
 
 Every model also reacts to the music by itself: to each kind of note, and continuously to the sound's bass, loudness, spectrum and waveform. The Modulation tab lists each of these **built-in reactions** with a live meter and a switch to turn it off. The **Intensity** slider there scales them along with every route, and **Music drives the visuals** turns them all off. Each model also has a few **macros**: single 0..1 knobs that push several parameters at once. Routes, macro settings and switched-off reactions are saved per model.
@@ -199,7 +200,8 @@ src/
   music/
     studio.ts        music panel: sequencer UI, routes, MIDI learn, audio file
     sequencer.ts     generative drums, bass, chords and melody with lookahead scheduling
-    audio.ts         drum kit, synth, file player, band and spectrum analyser
+    audio.ts         drum kit, mixer, file player, band and spectrum analyser
+    plaits/          Plaits engines and voices (dsp.ts), run in an AudioWorklet (worklet.ts)
     modulation.ts    modulation sources and how they combine with sliders and macros
     midi.ts          MIDI input (Tauri events, or Web MIDI in a browser)
   ui/controls.ts     builds parameter controls from a model's spec
@@ -207,3 +209,7 @@ src/
 src-tauri/           Rust/Tauri desktop shell, bundle config, MIDI input and updates (src/update.rs)
 scripts/bump-version.mjs  sets the version everywhere for a release
 ```
+
+## Credits
+
+The bass, chord and melody voices in `src/music/plaits/` are a TypeScript port of parts of [Plaits](https://github.com/pichenettes/eurorack/tree/master/plaits) and stmlib by Emilie Gillet (Mutable Instruments), used under the MIT licence; the copyright notice is kept at the top of `dsp.ts`.

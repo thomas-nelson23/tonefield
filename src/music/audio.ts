@@ -1,22 +1,6 @@
 import type { AudioBands } from "./modulation";
-
-export type Waveform = "triangle" | "sawtooth" | "square" | "sine";
-
-/** The sound of a chord style: oscillator shape, filter brightness and attack in seconds. */
-export interface ChordTone {
-  wave: Waveform;
-  cutoff: number;
-  attack: number;
-  /** Seconds for the chord to fade after it ends. */
-  release?: number;
-  /** Cents between each note's two detuned oscillators; 0 plays one oscillator. */
-  spread?: number;
-  /** Filter wobble: speed in Hz and depth as a share of the cutoff. */
-  wobbleRate?: number;
-  wobbleDepth?: number;
-  /** Filter resonance, 0..1. */
-  reso?: number;
-}
+import type { Patch, SynthMessage } from "./plaits/patch";
+import plaitsUrl from "./plaits/worklet.ts?worker&url";
 
 export type TrackKey = "drums" | "bass" | "chords" | "melody";
 export type DrumKind = "kick" | "snare" | "hat";
@@ -28,32 +12,9 @@ export interface DrumSound {
   tone: number;
 }
 
-/** The bass synth. Everything but `wave` is 0..1; the defaults in the sequencer give the stock sound. */
-export interface BassTone {
-  wave: Waveform;
-  sub: number;
-  cutoff: number;
-  reso: number;
-  /** How far the filter opens on each note. */
-  env: number;
-  /** How quickly it closes again. */
-  decay: number;
-  glide: number;
-  drive: number;
-}
-
-/** The melody synth, all 0..1 but `wave`. */
-export interface MelodyTone {
-  wave: Waveform;
-  bright: number;
-  reso: number;
-  attack: number;
-  release: number;
-  /** A second, detuned oscillator. */
-  thick: number;
-  vibrato: number;
-  glide: number;
-}
+/** The tracks the Plaits voices play, in the synth's output order. */
+export type SynthTrack = "bass" | "chords" | "melody";
+const SYNTH_TRACKS: SynthTrack[] = ["bass", "chords", "melody"];
 
 /** The mixer: per-track gain, pan -1..1 and effect sends 0..1, per-drum gain and pan, and the master effects. */
 export interface MixSettings {
@@ -87,7 +48,8 @@ export function midiToHz(note: number): number {
 }
 
 /**
- * Sound for the app: a small drum kit and synths for the sequencer and MIDI,
+ * Sound for the app: a small drum kit, Plaits voices (see plaits/) for the
+ * bass, chords and melody and the MIDI keyboard,
  * an audio-file player, and an analyser on the master bus whose band levels
  * feed the modulation layer. Each sequencer track has a mixer channel
  * (fader, pan, a meter and sends to a shared echo and reverb), and each drum
@@ -110,13 +72,18 @@ export class AudioEngine {
   /** Long enough to cover the time between meter redraws, so short peaks aren't missed. */
   private meterData = new Float32Array(2048);
   private masterPeak = 0;
-  private lastHz: Partial<Record<TrackKey, number>> = {};
-  private driveCurves = new Map<number, Float32Array<ArrayBuffer>>();
+  /** The Plaits voices for bass, chords and melody, once their worklet has loaded. */
+  private synth: AudioWorkletNode | null = null;
+  private outbox: SynthMessage[] = [];
+  private synthFailed = false;
+  private patches = new Map<SynthTrack, SynthMessage>();
+  private patchKeys = new Map<SynthTrack, string>();
+  /** MIDI notes being held. */
+  private held = new Set<number>();
   private analyser!: AnalyserNode;
   private freq = new Uint8Array(0);
   private wave = new Float32Array(0);
   private noise!: AudioBuffer;
-  private voices = new Map<number, { gain: GainNode; stop: (at: number) => void; release: number }>();
   private player: HTMLAudioElement | null = null;
   private playerSource: MediaElementAudioSourceNode | null = null;
   private smoothed: AudioBands = { ...SILENT };
@@ -144,6 +111,7 @@ export class AudioEngine {
     this.analyser.smoothingTimeConstant = 0.6;
     this.master.connect(comp).connect(this.analyser).connect(ctx.destination);
     this.buildMixer(ctx);
+    this.loadSynth(ctx);
     this.freq = new Uint8Array(this.analyser.frequencyBinCount);
     this.wave = new Float32Array(this.analyser.fftSize);
     this.noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
@@ -256,11 +224,6 @@ export class AudioEngine {
     return out;
   }
 
-  /** Where a sound for a track goes: its mixer channel, or the master before the mixer exists. */
-  private out(track: TrackKey): AudioNode {
-    return this.channels[track]?.input ?? this.master;
-  }
-
   /** Play a drum hit at audio time `time`. */
   drum(kind: DrumKind, velocity: number, time: number, sound: DrumSound = { pitch: 0, decay: 0.5, tone: 0.5 }): void {
     const ctx = this.ensure();
@@ -312,196 +275,68 @@ export class AudioEngine {
     }
   }
 
-  /** A bass note: a filtered oscillator over a sine sub, with a plucky filter envelope. */
-  bass(note: number, velocity: number, time: number, length: number, tone: BassTone): void {
+  /** Start loading the Plaits voices; notes sent before they're ready wait in `outbox`. */
+  private loadSynth(ctx: AudioContext): void {
+    if (!ctx.audioWorklet) {
+      this.synthFailed = true;
+      console.warn("AudioWorklet is unavailable: bass, chords and melody are silent.");
+      return;
+    }
+    ctx.audioWorklet.addModule(plaitsUrl).then(() => {
+      const node = new AudioWorkletNode(ctx, "plaits", { numberOfInputs: 0, numberOfOutputs: 3, outputChannelCount: [1, 1, 1] });
+      SYNTH_TRACKS.forEach((track, i) => node.connect(this.channels[track].input, i));
+      this.synth = node;
+      // Notes that were due while the voices loaded would all sound at once, so they're dropped.
+      const late = ctx.currentTime - 0.05;
+      const queued = this.outbox.filter((m) => !("time" in m) || m.type === "off" || m.time > late);
+      this.outbox = [];
+      node.port.postMessage([...this.patches.values(), ...queued]);
+    }, (e) => {
+      this.synthFailed = true;
+      this.outbox = [];
+      console.warn("Couldn't load the Plaits voices:", e);
+    });
+  }
+
+  private send(msg: SynthMessage): void {
+    if (this.synth) this.synth.port.postMessage([msg]);
+    else if (!this.synthFailed) this.outbox.push(msg);
+  }
+
+  /** Set a track's sound. Cheap to call every frame: only a changed patch is sent. */
+  patch(track: SynthTrack, patch: Patch): void {
+    const key = JSON.stringify(patch);
+    if (this.patchKeys.get(track) === key) return;
+    this.patchKeys.set(track, key);
+    const msg: SynthMessage = { type: "patch", track: SYNTH_TRACKS.indexOf(track), patch };
+    this.patches.set(track, msg);
+    // Before the voices load, the latest patches go with the first message.
+    this.synth?.port.postMessage([msg]);
+  }
+
+  /** Play a note, or a chord, for `duration` seconds from audio time `time`. */
+  note(track: SynthTrack, notes: number[], velocity: number, time: number, duration: number): void {
     const ctx = this.ensure();
-    const t = Math.max(time, ctx.currentTime);
-    const hz = midiToHz(note);
-    const glide = tone.glide ** 2 * 0.3;
-    const from = this.lastHz.bass;
-    this.lastHz.bass = hz;
-    const saw = ctx.createOscillator();
-    saw.type = tone.wave;
-    const sub = ctx.createOscillator();
-    for (const o of [saw, sub]) {
-      if (glide > 0.005 && from) {
-        o.frequency.setValueAtTime(from, t);
-        o.frequency.exponentialRampToValueAtTime(hz, t + glide);
-      } else o.frequency.value = hz;
-    }
-    const filter = ctx.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.Q.value = 0.7 + tone.reso * 7.7;
-    const cut = 2 ** ((tone.cutoff - 0.5) * 4);
-    filter.frequency.setValueAtTime(Math.min(18000, (220 + velocity * 2600 * tone.env) * cut), t);
-    filter.frequency.exponentialRampToValueAtTime(160 * cut, t + 0.3 * 2 ** ((tone.decay - 0.5) * 3));
-    const subGain = ctx.createGain();
-    subGain.gain.value = tone.sub * 1.2;
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(velocity * 0.3, t + 0.008);
-    gain.gain.setTargetAtTime(velocity * 0.22, t + 0.01, 0.2);
-    gain.gain.setTargetAtTime(0, t + length, 0.04);
-    saw.connect(filter).connect(gain);
-    sub.connect(subGain).connect(gain);
-    if (tone.drive > 0.01) {
-      const shaper = ctx.createWaveShaper();
-      shaper.curve = this.driveCurve(tone.drive);
-      const makeup = ctx.createGain();
-      makeup.gain.value = 1 / (1 + tone.drive * 1.5);
-      gain.connect(shaper).connect(makeup).connect(this.out("bass"));
-    } else gain.connect(this.out("bass"));
-    for (const o of [saw, sub]) {
-      o.start(t);
-      o.stop(t + length + 0.3);
-    }
+    this.send({ type: "note", track: SYNTH_TRACKS.indexOf(track), id: -1, time: Math.max(time, ctx.currentTime), notes, velocity, duration });
   }
 
-  /** A soft-clipping curve, cached per drive amount. */
-  private driveCurve(drive: number): Float32Array<ArrayBuffer> {
-    const key = Math.round(drive * 50);
-    let curve = this.driveCurves.get(key);
-    if (!curve) {
-      const k = 1 + (key / 50) * 12;
-      curve = new Float32Array(1024);
-      for (let i = 0; i < curve.length; i++) {
-        const x = (i / (curve.length - 1)) * 2 - 1;
-        curve[i] = Math.tanh(k * x) / Math.tanh(k);
-      }
-      this.driveCurves.set(key, curve);
-    }
-    return curve;
-  }
-
-  /** A melody note of `length` seconds. */
-  melody(note: number, velocity: number, time: number, length: number, tone: MelodyTone): void {
-    const ctx = this.ensure();
-    const t = Math.max(time, ctx.currentTime);
-    const v = this.voice(note, velocity, t, tone);
-    const release = this.releaseTau(tone);
-    v.gain.gain.setTargetAtTime(0, t + Math.max(length, this.attackTime(tone)), release);
-    v.stop(t + Math.max(length, this.attackTime(tone)) + release * 7);
-  }
-
-  /** A chord: one slightly detuned voice per note through a shared filter. */
-  chord(notes: number[], velocity: number, time: number, length: number, tone: ChordTone): void {
-    const ctx = this.ensure();
-    const t = Math.max(time, ctx.currentTime);
-    const filter = ctx.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.Q.value = 1 + (tone.reso ?? 0) * 11;
-    filter.frequency.setValueAtTime(tone.cutoff * (0.6 + 0.6 * velocity), t);
-    filter.frequency.exponentialRampToValueAtTime(tone.cutoff * 0.45, t + Math.max(0.15, length));
-    const gain = ctx.createGain();
-    const level = (velocity * 0.32) / Math.sqrt(Math.max(1, notes.length)) / ((tone.spread ?? 0) > 0 ? Math.SQRT2 : 1);
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(level, t + tone.attack);
-    gain.gain.setTargetAtTime(level * 0.7, t + tone.attack, 0.25);
-    const release = Math.max(0.06, tone.release ?? 0.06);
-    gain.gain.setTargetAtTime(0, t + length, release / 3);
-    filter.connect(gain).connect(this.out("chords"));
-    const end = t + length + release * 2 + 0.3;
-    if (tone.wobbleDepth && tone.wobbleRate) {
-      // A slow LFO on the filter, so the chord sweeps open and closed.
-      const lfo = ctx.createOscillator();
-      lfo.frequency.value = tone.wobbleRate;
-      const depth = ctx.createGain();
-      depth.gain.value = tone.cutoff * tone.wobbleDepth * 0.9;
-      lfo.connect(depth).connect(filter.frequency);
-      lfo.start(t);
-      lfo.stop(end);
-    }
-    const spread = tone.spread ?? 0;
-    for (const n of notes) {
-      for (const side of spread > 0 ? [-1, 1] : [0]) {
-        const osc = ctx.createOscillator();
-        osc.type = tone.wave;
-        osc.frequency.value = midiToHz(n);
-        osc.detune.value = side * spread * 0.5 + (Math.random() - 0.5) * 10;
-        osc.connect(filter);
-        osc.start(t);
-        osc.stop(end);
-      }
-    }
-  }
-
-  /** Start a held synth note (MIDI keyboard), on the melody synth. */
-  noteOn(note: number, velocity: number, tone: MelodyTone): void {
+  /** Start a held note on the melody voices (MIDI keyboard). */
+  noteOn(note: number, velocity: number): void {
     const ctx = this.ensure();
     this.noteOff(note);
-    this.voices.set(note, { ...this.voice(note, velocity, ctx.currentTime, tone), release: this.releaseTau(tone) });
+    this.held.add(note);
+    this.send({ type: "note", track: 2, id: note, time: ctx.currentTime, notes: [note], velocity, duration: Infinity });
   }
 
   noteOff(note: number): void {
-    const v = this.voices.get(note);
-    if (!v || !this.ctx) return;
-    this.voices.delete(note);
-    const t = this.ctx.currentTime;
-    v.gain.gain.cancelScheduledValues(t);
-    v.gain.gain.setTargetAtTime(0, t, v.release);
-    v.stop(t + v.release * 7);
+    if (!this.ctx || !this.held.delete(note)) return;
+    this.send({ type: "off", track: 2, id: note, time: this.ctx.currentTime });
   }
 
-  /** Release every held note, e.g. when playback pauses. */
+  /** Release every note, e.g. when playback pauses. */
   allNotesOff(): void {
-    for (const note of [...this.voices.keys()]) this.noteOff(note);
-  }
-
-  private attackTime(tone: MelodyTone): number {
-    return 0.01 + tone.attack ** 2 * 1.2;
-  }
-
-  /** Time constant of a melody note's fade once it ends. */
-  private releaseTau(tone: MelodyTone): number {
-    return 0.08 + tone.release ** 2 * 0.9;
-  }
-
-  /** A melody synth voice, sounding from `t` until it's stopped. */
-  private voice(note: number, velocity: number, t: number, tone: MelodyTone): { gain: GainNode; stop: (at: number) => void } {
-    const ctx = this.ctx!;
-    const hz = midiToHz(note);
-    const glide = tone.glide ** 2 * 0.25;
-    const from = this.lastHz.melody;
-    this.lastHz.melody = hz;
-    const filter = ctx.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.Q.value = 1 + tone.reso * 11;
-    const bright = 2 ** ((tone.bright - 0.5) * 3);
-    filter.frequency.setValueAtTime(Math.min(18000, (600 + velocity * 4000) * bright), t);
-    filter.frequency.exponentialRampToValueAtTime(500 * bright, t + 0.5);
-    const gain = ctx.createGain();
-    const attack = this.attackTime(tone);
-    const level = velocity * 0.3 / (tone.thick > 0.01 ? Math.SQRT2 : 1);
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(level, t + attack);
-    gain.gain.setTargetAtTime(level * 0.6, t + attack, 0.15);
-    filter.connect(gain).connect(this.out("melody"));
-    const oscs: OscillatorNode[] = [];
-    for (const side of tone.thick > 0.01 ? [-1, 1] : [0]) {
-      const osc = ctx.createOscillator();
-      osc.type = tone.wave;
-      if (glide > 0.005 && from) {
-        osc.frequency.setValueAtTime(from, t);
-        osc.frequency.exponentialRampToValueAtTime(hz, t + glide);
-      } else osc.frequency.value = hz;
-      osc.detune.value = side * tone.thick * 18;
-      osc.connect(filter);
-      osc.start(t);
-      oscs.push(osc);
-    }
-    if (tone.vibrato > 0.01) {
-      // Vibrato that eases in, as a singer's would.
-      const lfo = ctx.createOscillator();
-      lfo.frequency.value = 5.5;
-      const depth = ctx.createGain();
-      depth.gain.setValueAtTime(0, t);
-      depth.gain.linearRampToValueAtTime(tone.vibrato * 45, t + 0.25);
-      lfo.connect(depth);
-      for (const o of oscs) depth.connect(o.detune);
-      lfo.start(t);
-      oscs.push(lfo);
-    }
-    return { gain, stop: (at) => oscs.forEach((o) => o.stop(at)) };
+    this.held.clear();
+    if (this.ctx) this.send({ type: "allOff" });
   }
 
   /** Load an audio file to play through the analyser. */
