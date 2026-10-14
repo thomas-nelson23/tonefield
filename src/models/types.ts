@@ -147,8 +147,8 @@ export interface ModRoute {
  * What the music is doing right now, handed to `step` and `render` every
  * frame so models can move with the sound continuously, not only on hits.
  * Every value is already scaled by the global music Intensity (so it can go
- * above 1) and is zero when music is switched off or the matching built-in
- * reaction is switched off in the modulation matrix.
+ * above 1), times the strength of the matching built-in reaction row in the
+ * modulation matrix, and zero when music or that row is switched off.
  */
 export interface MusicFrame {
   /** Drum, melody, bass-part and chord envelopes: jump to the hit's velocity, then decay. */
@@ -226,11 +226,13 @@ export interface ModelDefinition {
   modulations?: ModRoute[];
   /**
    * Everything the model does with the music by itself (in `onNote`, and with
-   * the `MusicFrame`), listed in the modulation matrix so the user can see and
-   * switch off each one. Switching one off stops those notes reaching
-   * `onNote` and zeroes that part of the `MusicFrame`.
+   * the `MusicFrame`). Each one starts as a row in the modulation matrix,
+   * named by `label` with `text` as its longer explanation, where the user
+   * can scale, switch off or delete it. Its strength scales the velocity of
+   * those notes and that part of the `MusicFrame`; off or deleted, the notes
+   * don't reach `onNote` and that part of the frame is zero.
    */
-  reactions?: { source: ReactionSource; text: string }[];
+  reactions?: { source: ReactionSource; label: string; text: string }[];
   /**
    * The model paints its own background each frame (e.g. to leave fading
    * trails), so the host doesn't clear the canvas first.
