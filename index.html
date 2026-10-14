@@ -155,16 +155,24 @@
                   <label class="check"><input id="mod-enabled" type="checkbox" /> Music drives the visuals</label>
                   <label class="mod-global" title="Scales every route on every model. 100% is as set; 200% doubles every push.">Intensity <input id="mod-intensity" type="range" min="0" max="2" step="0.05" /> <span id="mod-intensity-readout" class="readout"></span></label>
                   <label class="mod-global" title="How long a hit keeps pushing after it lands.">Note decay <input id="mod-decay" type="range" min="0.05" max="1.5" step="0.05" /> <span id="mod-decay-readout" class="readout"></span></label>
-                  <div class="section-label mod-gap">Built-in reactions in this model</div>
-                  <div id="mod-reactions"></div>
                 </div>
                 <div class="mod-main">
-                  <div class="section-label">Routes in this model</div>
-                  <p class="muted tab-help">Each route lets a sound push a slider by a share of its range. The bar shows the sound right now, and ♪ under a sidebar slider names what is pushing it.</p>
-                  <div id="mod-routes"></div>
-                  <div class="row-buttons">
-                    <button type="button" id="mod-add">Add route</button>
-                    <button type="button" id="mod-defaults">Reset to model defaults</button>
+                  <div class="mod-col">
+                    <div class="section-label" id="mod-builtins-title">Built into this model</div>
+                    <p class="muted tab-help">What the model does with the music by itself. Hover a row to read what it does; the slider sets how strongly.</p>
+                    <div id="mod-builtins" class="mod-rows"></div>
+                    <div class="row-buttons">
+                      <button type="button" id="mod-restore" hidden>Restore built-ins</button>
+                    </div>
+                  </div>
+                  <div class="mod-col">
+                    <div class="section-label">Your routes</div>
+                    <p class="muted tab-help">Each route lets a sound push a slider by a share of its range. The bar shows the sound right now, and ♪ under a sidebar slider names what is pushing it.</p>
+                    <div id="mod-routes" class="mod-rows"></div>
+                    <div class="row-buttons">
+                      <button type="button" id="mod-add">Add route</button>
+                      <button type="button" id="mod-defaults">Reset to model defaults</button>
+                    </div>
                   </div>
                 </div>
               </div>
