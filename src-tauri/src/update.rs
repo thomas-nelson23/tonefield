@@ -118,9 +118,10 @@ fn pick_asset(kind: Kind, assets: &[Asset]) -> Option<&Asset> {
         Kind::Deb => a.name.ends_with(&format!("_{deb_arch}.deb")),
         Kind::Appimage => a.name.ends_with(&format!("_{deb_arch}.AppImage")),
         Kind::Windows => a.name.ends_with("-setup.exe"),
+        // One universal disk image since 0.3.4; older releases had one per chip
         Kind::Macos => {
             let mac_arch = if arch == "x86_64" { "x64" } else { arch };
-            a.name.ends_with(&format!("_{mac_arch}.dmg"))
+            a.name.ends_with("_universal.dmg") || a.name.ends_with(&format!("_{mac_arch}.dmg"))
         }
         Kind::Manual => false,
     };
@@ -321,5 +322,10 @@ mod tests {
         }
         assert_eq!(pick_asset(Kind::Windows, &assets).unwrap().name, "Tonefield_0.2.0_x64-setup.exe");
         assert!(pick_asset(Kind::Manual, &assets).is_none());
+        let mac: Vec<Asset> = ["Tonefield_0.3.4_x64-setup.exe", "Tonefield_0.3.4_universal.dmg"]
+            .iter()
+            .map(|n| Asset { name: n.to_string(), browser_download_url: String::new() })
+            .collect();
+        assert_eq!(pick_asset(Kind::Macos, &mac).unwrap().name, "Tonefield_0.3.4_universal.dmg");
     }
 }

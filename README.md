@@ -55,7 +55,7 @@ npm run dev           # or just the UI in a browser at http://localhost:1420
 Build a distributable:
 
 ```sh
-npm run tauri build   # macOS: .app + .dmg   Linux: .deb + .AppImage   Windows: setup .exe
+npm run tauri build   # macOS: .app + .dmg (add -- --target universal-apple-darwin for both chips)   Linux: .deb + .AppImage   Windows: setup .exe
 ```
 
 On Linux, install the webview deps first:
@@ -115,12 +115,20 @@ The AppImage is built on Ubuntu and bundles its own libraries, so the pacman pac
 
 - **Blank or white window, or a crash on start (common with NVIDIA drivers):** the app now sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself on Linux, so this should not happen. If you need the DMA-BUF renderer back, launch with `WEBKIT_DISABLE_DMABUF_RENDERER=0 tonefield`.
 
+## Installing on macOS
+
+Download `Tonefield_<version>_universal.dmg` from the [latest release](https://github.com/thomas-nelson23/tonefield/releases/latest). It runs natively on both Apple Silicon and Intel Macs.
+
+1. Open the disk image and drag **Tonefield** into **Applications**.
+2. Open Tonefield. The app isn't signed with an Apple Developer ID, so the first time macOS says it can't verify it: click **Done**, open **System Settings › Privacy & Security**, scroll down and click **Open Anyway**, then confirm. After that it opens normally.
+
+   Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/Tonefield.app`
+
+Updates from the in-app Update button don't need this step again. Releases before 0.3.4 were Apple Silicon only and could say the app "is damaged"; the Terminal command above fixes that.
+
 ## Installing on Windows 10/11
 
-Every push to `main` builds a Windows installer in CI.
-
-1. Open the repo's **Actions** tab, pick the latest **Build** run on `main`, and download the `tonefield-Windows` artifact.
-2. Unzip it and run `nsis/Tonefield_<version>_x64-setup.exe`. It installs for your user only, so it needs no admin rights, and adds Start menu and uninstall entries.
+Download `Tonefield_<version>_x64-setup.exe` from the [latest release](https://github.com/thomas-nelson23/tonefield/releases/latest) and run it. It installs for your user only, so it needs no admin rights, and adds Start menu and uninstall entries.
 
 The installer isn't code-signed, so Windows SmartScreen says "Windows protected your PC" the first time: click **More info**, then **Run anyway**. The app runs on Microsoft Edge WebView2, which Windows 11 and up-to-date Windows 10 already have; if it's missing, the installer downloads it.
 
@@ -134,7 +142,7 @@ The **Update** button in the bottom bar checks this repo's [GitHub releases](htt
 - **.deb** (Debian, Ubuntu): the same with `apt-get install`.
 - **AppImage**: swaps the new AppImage in place.
 - **Windows**: runs the new setup `.exe` in passive mode, which reopens Tonefield when it's done.
-- **macOS**: opens the new disk image to drag into Applications.
+- **macOS**: opens the new universal disk image to drag into Applications.
 - **Anything else** (dev builds, `npm run tauri dev`): links to the release page.
 
 Releasing is a version bump: `npm run bump 0.3.0` sets the version in every file that carries it, and when that lands on `main`, CI builds every platform and publishes them as release `v0.3.0`. Pushes that keep the version publish nothing.

@@ -11,8 +11,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # One disk image for both Apple Silicon and Intel Macs
           - platform: macos-latest
             bundles: app,dmg
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
           - platform: ubuntu-22.04
             bundles: deb,appimage
           - platform: windows-latest
@@ -33,6 +36,8 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -41,12 +46,19 @@ jobs:
       - run: npm ci
       - run: npm run bump -- --check
       - run: npm run typecheck
-      - run: npx tauri build --bundles ${{ matrix.bundles }}
+      - run: npx tauri build --bundles ${{ matrix.bundles }} ${{ matrix.args }}
+
+      - name: Check the Mac app runs on both chip types and is signed
+        if: runner.os == 'macOS'
+        run: |
+          app=src-tauri/target/universal-apple-darwin/release/bundle/macos/Tonefield.app
+          lipo "$app"/Contents/MacOS/* -verify_arch arm64 x86_64
+          codesign --verify --deep --strict --verbose=2 "$app"
 
       - uses: actions/upload-artifact@v4
         with:
           name: tonefield-${{ runner.os }}
-          path: src-tauri/target/release/bundle/
+          path: src-tauri/target/${{ runner.os == 'macOS' && 'universal-apple-darwin/' || '' }}release/bundle/
 
   arch:
     # Builds packaging/arch/PKGBUILD the way an Arch/CachyOS user would
