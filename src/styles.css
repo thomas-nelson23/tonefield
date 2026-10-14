@@ -218,7 +218,8 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
 }
 .doc-state { color: var(--accent); font-weight: 400; }
 #stage { position: relative; overflow: hidden; flex: 1; min-height: 0; touch-action: none; cursor: crosshair; }
-#canvas { display: block; }
+#canvas, #canvas-gl { display: block; }
+#canvas[hidden], #canvas-gl[hidden] { display: none; }
 #stage .grade { position: absolute; top: 0; left: 0; pointer-events: none; }
 
 /* ---- Bottom bar, across the whole window ---- */

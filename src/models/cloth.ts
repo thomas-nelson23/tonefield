@@ -1,3 +1,4 @@
+import { hsla, rgba, type Gfx } from "../gl/gfx";
 import { NOMINAL_DT, type ModelDefinition, type MusicFrame, type ParamSpec, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { gravityTo, gravityModeParam, isUniform, uniformDir } from "./lib/gravity";
 import { noteHue } from "./lib/music";
@@ -515,6 +516,52 @@ class ClothSim implements SimulationModel {
       g.stroke();
     }
   }
+  /** The same picture as `render`, drawn on the GPU. */
+  renderGL(gfx: Gfx, _view: Viewport, p: ParamValues, m: MusicFrame): void {
+    gfx.feedback(p.afterglow as number, p.zoom as number, p.spin as number, this.stepped);
+    this.stepped = false;
+    const { x, y, alive, rest, cols, rows, hLink, vLink, dye, dyeHue } = this;
+    const scheme = p.colours as string;
+    const glow = 0.5 + Math.min(1, m.level) * 0.3 + m.kick * 0.15;
+    const cells = (cols - 1) * (rows - 1);
+    const D = Math.max(1, Math.min(Math.round((p.smoothing as number) || 1), Math.floor(Math.sqrt(MAX_QUADS / cells))));
+    const [sx, sy] = D > 1 ? this.smoothGrid(D) : [x, y];
+    const SW = (cols - 1) * D + 1;
+    const subArea = (rest * rest) / (D * D);
+    const colours = this.glColours;
+    for (let i = 0; i < HUES * SHADES; i++) {
+      const shade = (i % SHADES) / (SHADES - 1);
+      colours[i] = hsla(Math.floor(i / SHADES) * (360 / HUES), 0.8, Math.min(1, (12 + shade * 50 * glow + shade * 10) / 100), 0.55 + shade * 0.4);
+    }
+    for (let j = 0; j < rows - 1; j++) {
+      for (let i = 0; i < cols - 1; i++) {
+        const k = j * cols + i;
+        if (!alive[hLink[k]] || !alive[vLink[k]] || !alive[vLink[k + 1]] || !alive[hLink[k + cols]]) continue;
+        let hue = schemeHue(scheme, i / (cols - 1), m.hue, m.beats);
+        if (dye[k] > 0.15) hue = dyeHue[k];
+        const hb = Math.floor((((hue % 360) + 360) % 360) / (360 / HUES)) % HUES;
+        for (let v = 0; v < D; v++) {
+          for (let u = 0; u < D; u++) {
+            const a = (j * D + v) * SW + i * D + u, b = a + 1, c = a + SW + 1, d = a + SW;
+            const area = Math.abs((sx[c] - sx[a]) * (sy[d] - sy[b]) - (sy[c] - sy[a]) * (sx[d] - sx[b])) / 2;
+            const shade = Math.min(1, (area / subArea) * 0.8 + dye[k] * 0.6);
+            gfx.quad4(sx[a], sy[a], sx[b], sy[b], sx[c], sy[c], sx[d], sy[d], colours[hb * SHADES + Math.min(SHADES - 1, Math.floor(shade * SHADES))]);
+          }
+        }
+      }
+    }
+    if (p.threads) {
+      gfx.blend("add");
+      const colour = rgba(255, 255, 255, Math.min(1, 0.06 + m.hat * 0.15 + m.treble * 0.1));
+      const { ca, cb } = this;
+      for (let c = 0; c < ca.length; c++) if (alive[c]) gfx.line(x[ca[c]], y[ca[c]], x[cb[c]], y[cb[c]], 0.6, colour, false);
+      gfx.blend("normal");
+    }
+    if (this.cutter) gfx.ring(this.cutter.x, this.cutter.y, 14, 1, rgba(255, 120, 120, 0.7));
+  }
+
+  private readonly glColours = new Uint32Array(HUES * SHADES);
+
 
   stats(): string {
     return `${this.n} points · ${this.torn} links torn`;

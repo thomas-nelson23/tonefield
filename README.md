@@ -4,7 +4,7 @@ A music-driven visualizer for the desktop. Each model is a physics or algorithmi
 
 ![The visualizer playing along with the sequencer](docs/screenshot.png)
 
-Built with [Tauri 2](https://tauri.app) (Rust shell, native webview) and TypeScript + Canvas 2D. macOS is the first target; Linux (`.deb`, AppImage, and a pacman package for Arch-based distros like CachyOS) and Windows 10/11 (an `.exe` installer) build from the same code.
+Built with [Tauri 2](https://tauri.app) (Rust shell, native webview) and TypeScript, drawing with WebGL 2 on the GPU (Canvas 2D as a fallback). macOS is the first target; Linux (`.deb`, AppImage, and a pacman package for Arch-based distros like CachyOS) and Windows 10/11 (an `.exe` installer) build from the same code.
 
 ## Models
 
@@ -152,6 +152,7 @@ Every model implements `SimulationModel` from [`src/models/types.ts`](src/models
      reset(view, params) { /* build state */ }
      step(dt, params, music) { /* advance state by dt seconds */ }
      render(g, view, params, music) { /* draw with the 2D context */ }
+     renderGL(gfx, view, params, music) { /* optional: the same picture on the GPU */ }
    }
 
    export const myModel: ModelDefinition = {
@@ -167,6 +168,8 @@ Every model implements `SimulationModel` from [`src/models/types.ts`](src/models
    ```
 
 2. Add it to the list in [`src/models/registry.ts`](src/models/registry.ts).
+
+`renderGL` draws through `Gfx` ([`src/gl/gfx.ts`](src/gl/gfx.ts)): `feedback` for the shared trails, then `line`, `disc`, `ring`, `glow`, `quad4`, `rect`, and `upload` + `image` for pixel buffers, with `blend("add")` for the glowing look. The host uses it whenever WebGL works and the Drawing setting in the bottom bar is GPU, and falls back to `render` otherwise. In a software-rendered webview Canvas 2D fills every shape on the CPU, so `renderGL` is what keeps a busy model fast.
 
 Sliders, checkboxes and dropdowns (`kind: "choice"`) are generated from `params` automatically. Mark a param `resetOnChange: true` if changing it should rebuild the simulation (e.g. a particle count).
 

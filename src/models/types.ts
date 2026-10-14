@@ -1,3 +1,5 @@
+import type { Gfx } from "../gl/gfx";
+
 /**
  * The contract every simulation model implements.
  *
@@ -209,6 +211,12 @@ export interface SimulationModel {
    * definition sets `paintsBackground`.
    */
   render(g: CanvasRenderingContext2D, view: Viewport, params: ParamValues, music: MusicFrame): void;
+  /**
+   * Optional: draw the same picture on the GPU. When present (and WebGL works)
+   * the host calls this instead of `render`. The frame is already cleared,
+   * unless the definition sets `paintsBackground`.
+   */
+  renderGL?(gfx: Gfx, view: Viewport, params: ParamValues, music: MusicFrame): void;
   /** Optional: react to mouse / touch input on the canvas. */
   onPointer?(input: PointerInput, params: ParamValues): void;
   /** Optional: keep state valid when the canvas size changes. */

@@ -7,6 +7,8 @@ import type { ParamSpec, ParamValues, Viewport } from "../types";
 
 /** The near-black the visualizers fade toward. */
 export const BACKGROUND = "#06080c";
+/** The same, as red, green and blue bytes. */
+export const BACKGROUND_RGB: [number, number, number] = [6, 8, 12];
 
 /**
  * Video feedback: each frame the previous image is redrawn slightly faded,
