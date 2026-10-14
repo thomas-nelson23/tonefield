@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8"><style>html,body{margin:0;height:100%;background:#000;overflow:hidden}canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block}</style>
+<body><script>
+const W = innerWidth, H = innerHeight, N_LINES = 4000, N_DOTS = 1500, SECS = 4;
+const pts = []; for (let i = 0; i < N_DOTS; i++) pts.push([Math.random()*W, Math.random()*H, Math.random()*6.28]);
+function move(t){ for (const p of pts){ p[0]+=Math.cos(p[2]+t)*0.7; p[1]+=Math.sin(p[2]*1.3+t)*0.7; } }
+const results = { w: W, h: H, dpr: devicePixelRatio, ua: navigator.userAgent };
+function mk(type){ document.querySelectorAll('canvas').forEach(c=>c.remove()); const c=document.createElement('canvas'); c.width=W; c.height=H; document.body.append(c); return c; }
+function run2d(draw){ const c=mk(); const g=c.getContext('2d'); return loop(t=>{ g.globalCompositeOperation='source-over'; g.fillStyle='#0d1117'; g.fillRect(0,0,W,H); if(!draw) return; move(t); g.globalCompositeOperation='lighter'; g.strokeStyle='rgba(120,180,255,0.25)'; g.lineWidth=1.5; g.beginPath(); for(let i=0;i<N_LINES;i++){const a=pts[i%N_DOTS], b=pts[(i*7+13)%N_DOTS]; g.moveTo(a[0],a[1]); g.lineTo(b[0],b[1]);} g.stroke(); g.fillStyle='rgba(255,200,120,0.8)'; for(const p of pts){ g.beginPath(); g.arc(p[0],p[1],3,0,6.283); g.fill(); } }); }
+let glInfo = null;
+function rungl(draw){ const c=mk(); const gl=c.getContext('webgl',{alpha:false,antialias:false,depth:false}); if(!gl) return Promise.resolve({error:'no webgl'});
+  const dbg=gl.getExtension('WEBGL_debug_renderer_info'); glInfo={vendor: dbg?gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL):gl.getParameter(gl.VENDOR), renderer: dbg?gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER), version: gl.getParameter(gl.VERSION)};
+  const sh=(t,s)=>{const x=gl.createShader(t);gl.shaderSource(x,s);gl.compileShader(x);return x;}; const pr=gl.createProgram();
+  gl.attachShader(pr,sh(gl.VERTEX_SHADER,'attribute vec2 p;uniform vec2 r;uniform float s;void main(){gl_Position=vec4(p/r*2.0-1.0,0,1);gl_Position.y=-gl_Position.y;gl_PointSize=s;}'));
+  gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,'precision mediump float;uniform vec4 c;uniform float pt;void main(){float a=1.0; if(pt>0.5){vec2 d=gl_PointCoord-0.5; a=smoothstep(0.5,0.4,length(d));} gl_FragColor=vec4(c.rgb*c.a*a, c.a*a);}'));
+  gl.linkProgram(pr); gl.useProgram(pr); const buf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf); const loc=gl.getAttribLocation(pr,'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  gl.uniform2f(gl.getUniformLocation(pr,'r'),W,H); const uc=gl.getUniformLocation(pr,'c'), us=gl.getUniformLocation(pr,'s'), upt=gl.getUniformLocation(pr,'pt');
+  const lines=new Float32Array(N_LINES*4), dots=new Float32Array(N_DOTS*2); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE); gl.viewport(0,0,W,H);
+  return loop(t=>{ gl.clearColor(13/255,17/255,23/255,1); gl.clear(gl.COLOR_BUFFER_BIT); if(!draw) return; move(t);
+    for(let i=0;i<N_LINES;i++){const a=pts[i%N_DOTS], b=pts[(i*7+13)%N_DOTS]; lines[i*4]=a[0];lines[i*4+1]=a[1];lines[i*4+2]=b[0];lines[i*4+3]=b[1];}
+    gl.bufferData(gl.ARRAY_BUFFER,lines,gl.STREAM_DRAW); gl.uniform4f(uc,120/255,180/255,1,0.25); gl.uniform1f(upt,0); gl.drawArrays(gl.LINES,0,N_LINES*2);
+    for(let i=0;i<N_DOTS;i++){dots[i*2]=pts[i][0];dots[i*2+1]=pts[i][1];} gl.bufferData(gl.ARRAY_BUFFER,dots,gl.STREAM_DRAW); gl.uniform4f(uc,1,200/255,120/255,0.8); gl.uniform1f(us,6); gl.uniform1f(upt,1); gl.drawArrays(gl.POINTS,0,N_DOTS); }); }
+function loop(fn){ return new Promise(res=>{ let n=0, start=0, js=0, last=0; const f=(now)=>{ const t0=performance.now(); fn(now/1000); js+=performance.now()-t0; n++; if(n===15){start=now;js=0;} if(n>15 && now-start>SECS*1000){ const frames=n-15; res({fps:+(frames*1000/(now-start)).toFixed(1), jsMs:+(js/frames).toFixed(2)}); return;} requestAnimationFrame(f); }; requestAnimationFrame(f); }); }
+(async()=>{ results['2d-empty']=await run2d(false); results['2d-scene']=await run2d(true); results['gl-empty']=await rungl(false); results['gl-scene']=await rungl(true); results.webgl=glInfo; document.title='DONE:'+JSON.stringify(results); })();
+</script>

@@ -1,3 +1,4 @@
+import { type Gfx } from "../gl/gfx";
 import { NOMINAL_DT, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { noteHash } from "./lib/music";
 import { Raster, hsl, palette } from "./lib/raster";
@@ -367,6 +368,34 @@ class ReactionSim implements SimulationModel {
     g.drawImage(image, 0, 0, W, H);
     g.globalAlpha = 1;
   }
+  /**
+   * The same picture as `render`, drawn on the GPU: the grid of shades goes up
+   * as it is and is smoothed and coloured in the shader, so the upscale that
+   * costs `render` most of its time is free here.
+   */
+  renderGL(gfx: Gfx, _view: Viewport, p: ParamValues, m: MusicFrame): void {
+    if (this.shade.length === 0) return;
+    gfx.feedback(p.afterglow as number, p.zoom as number, p.spin as number, this.stepped);
+    this.stepped = false;
+    const scheme = p.colours as string;
+    let lut = PALETTES[scheme];
+    if (!lut) {
+      const h = scheme === "rainbow" ? (m.beats * 12) % 360 : this.hue;
+      if (Math.abs(((h - this.lutHue + 540) % 360) - 180) > 2) { this.lut = huePalette(h); this.lutHue = h; }
+      lut = this.lut;
+    }
+    const W = this.w * this.cell, H = this.h * this.cell;
+    const alpha = 1 - Math.min(0.9, (p.afterglow as number) * 0.9);
+    const sharp = p.sharp !== false;
+    gfx.ink(this.shade, this.w, this.h, lut, sharp, 0, 0, W, H, alpha);
+    const bloom = (p.bloom as number) * (0.25 + Math.min(1.5, m.bass) * 0.75);
+    if (bloom > 0.02) {
+      gfx.blend("add");
+      gfx.ink(this.shade, this.w, this.h, lut, sharp, 0, 0, W, H, alpha * Math.min(1, bloom * 0.22), 1.04 + Math.min(1.5, m.bass) * 0.04);
+      gfx.blend("normal");
+    }
+  }
+
 
   stats(): string {
     return `${this.steps.toLocaleString()} reaction steps`;

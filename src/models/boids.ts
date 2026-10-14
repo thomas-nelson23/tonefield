@@ -1,3 +1,4 @@
+import { hsla, rgba, type Gfx } from "../gl/gfx";
 import { jitterScale, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { noteHash, noteHue } from "./lib/music";
 import { Feedback, applyFeedback, colourParam, feedbackParams, schemeHue } from "./lib/visual";
@@ -284,6 +285,27 @@ class BoidsSim implements SimulationModel {
     g.lineCap = "butt";
     g.globalCompositeOperation = "source-over";
   }
+  /** The same picture as `render`, drawn on the GPU. */
+  renderGL(gfx: Gfx, _view: Viewport, p: ParamValues, m: MusicFrame): void {
+    gfx.feedback(p.afterglow as number, p.zoom as number, p.spin as number, this.stepped);
+    this.stepped = false;
+    const z = p.size as number;
+    const streak = (p.streak as number) * (1 + Math.min(1.5, m.bass) * 1.2);
+    const light = 48 + this.flash * 20 + Math.min(1, m.level) * 8;
+    const colours = this.glColours;
+    for (let i = 0; i < HUE_BUCKETS; i++) colours[i] = hsla((i + 0.5) * (360 / HUE_BUCKETS), 0.9, light / 100, 0.5);
+    const spark = rgba(255, 255, 255, Math.min(1, 0.6 + m.treble * 0.4));
+    gfx.blend("add");
+    for (const b of this.boids) {
+      const hue = ((Math.atan2(b.hy, b.hx) * 180) / Math.PI + 360) % 360;
+      gfx.line(b.x - b.vx * 0.06 * streak, b.y - b.vy * 0.06 * streak, b.x, b.y, 1.6 * z, colours[Math.floor(hue / (360 / HUE_BUCKETS)) % HUE_BUCKETS], false);
+    }
+    for (const b of this.boids) if (b.spark > 0.1) gfx.rect(b.x - 1.5 * z, b.y - 1.5 * z, 3 * z, 3 * z, spark);
+    gfx.blend("normal");
+  }
+
+  private readonly glColours = new Uint32Array(HUE_BUCKETS);
+
 
   stats(): string {
     return `${this.boids.length} boids`;
