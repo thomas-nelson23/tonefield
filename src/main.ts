@@ -217,7 +217,12 @@ function frame(now: number): void {
   const notes = studio.frame(now / 1000, elapsed);
   studio.apply(effective);
   music = studio.music();
-  if (running && model.onNote) for (const n of notes) if (studio.reacts(n.role)) model.onNote(n, effective);
+  if (running && model.onNote) {
+    for (const n of notes) {
+      const k = studio.reaction(n.role);
+      if (k > 0) model.onNote(k === 1 ? n : { ...n, velocity: n.velocity * k }, effective);
+    }
+  }
 
   if (running) {
     // Fixed-timestep integration keeps physics stable on 60Hz and 120Hz screens alike.

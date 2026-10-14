@@ -1,6 +1,6 @@
 import { SILENT_MUSIC, type ModRoute, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamSpec, type ParamValues, type ReactionSource } from "../models/types";
 import { noteHue } from "../models/lib/music";
-import { renderParamControls, type ParamControls } from "../ui/controls";
+import { paintRange, renderParamControls, type ParamControls } from "../ui/controls";
 import type { Grade } from "../ui/grade";
 import { knob, fader, type Dial } from "../ui/knob";
 import { AudioEngine, BeatDetector, type DrumKind, type TrackKey } from "./audio";
@@ -43,13 +43,24 @@ interface GlobalSettings {
  */
 const MODEL_SETTINGS_VERSION = 6;
 
+/** One of the model's built-in reactions, as a row in the modulation matrix. */
+interface ReactionRow {
+  source: ReactionSource;
+  /** How strongly the model reacts, 0..2; 1 is as designed. */
+  amount: number;
+  off?: boolean;
+}
+
 interface ModelSettings {
   v: number;
   macros: Record<string, number>;
   routes: ModRoute[];
-  /** Built-in reactions switched off for this model. */
-  muted: ReactionSource[];
+  /** The model's built-in reactions still in the matrix; a deleted one is left out. */
+  reactions: ReactionRow[];
 }
+
+/** What older saves kept instead of reaction rows: the reactions switched off. */
+type SavedModelSettings = ModelSettings & { muted?: ReactionSource[] };
 
 /** The global controls a route can push. */
 const GLOBAL_NUMBERS = GLOBAL_SPECS.filter((p): p is NumberSpec => p.kind === "number");
@@ -274,7 +285,7 @@ export class Studio {
 
   private def: ModelDefinition | null = null;
   private base: ParamValues = {};
-  private modelSettings: ModelSettings = { v: MODEL_SETTINGS_VERSION, macros: {}, routes: [], muted: [] };
+  private modelSettings: ModelSettings = { v: MODEL_SETTINGS_VERSION, macros: {}, routes: [], reactions: [] };
   private macroOut: Record<string, number> = {};
   private paramControls: ParamControls | null = null;
   private macroControls: ParamControls | null = null;
@@ -358,9 +369,11 @@ export class Studio {
     this.base = base;
     this.paramControls = controls;
     this.onBaseChanged = onBaseChanged;
-    const saved = load<ModelSettings>(`music:model:${def.id}`);
+    const saved = load<SavedModelSettings>(`music:model:${def.id}`);
     // Settings saved before the current defaults existed are replaced, so new default routes show up.
-    this.modelSettings = saved && saved.v === MODEL_SETTINGS_VERSION ? { ...saved, muted: saved.muted ?? [] } : this.defaultModelSettings(def);
+    this.modelSettings = saved && saved.v === MODEL_SETTINGS_VERSION
+      ? { v: saved.v, macros: saved.macros, routes: saved.routes, reactions: savedReactions(def, saved) }
+      : this.defaultModelSettings(def);
     // Drop anything that points at parameters the model no longer has.
     const valid = new Set(this.targets().map((t) => t.id));
     this.modelSettings.routes = this.modelSettings.routes.filter((r) => valid.has(r.target));
@@ -373,7 +386,7 @@ export class Studio {
   private defaultModelSettings(def: ModelDefinition): ModelSettings {
     const macros: Record<string, number> = {};
     for (const m of def.macros ?? []) macros[m.key] = 0;
-    return { v: MODEL_SETTINGS_VERSION, macros, routes: (def.modulations ?? []).map((r) => ({ ...r })), muted: [] };
+    return { v: MODEL_SETTINGS_VERSION, macros, routes: (def.modulations ?? []).map((r) => ({ ...r })), reactions: defaultReactions(def) };
   }
 
   private saveModel(): void {
@@ -426,20 +439,24 @@ export class Studio {
     return events;
   }
 
-  /** Whether the model's own reaction to this kind of note is switched on. */
-  reacts(role: ReactionSource): boolean {
-    return this.settings.musicOn && !this.modelSettings.muted.includes(role);
+  /**
+   * How strongly the model reacts to this source by itself: its row's amount
+   * in the matrix, or 0 when music, or the row, is off or deleted.
+   */
+  reaction(source: ReactionSource): number {
+    if (!this.settings.musicOn) return 0;
+    const row = this.modelSettings.reactions.find((r) => r.source === source);
+    return row && !row.off ? row.amount : 0;
   }
 
   /**
    * The continuous music feed for the model this frame: envelopes, bands,
-   * spectrum and beat, scaled by Intensity, with switched-off reactions zeroed.
+   * spectrum and beat, scaled by Intensity and by each reaction row's amount.
    */
   music(): MusicFrame {
     const f = this.feed;
     const depth = this.settings.musicOn ? this.settings.intensity : 0;
-    const muted = this.modelSettings.muted;
-    const val = (r: ReactionSource, v: number) => (muted.includes(r) ? 0 : v * depth);
+    const val = (r: ReactionSource, v: number) => v * depth * this.reaction(r);
     const src = this.sources;
     f.kick = val("kick", src.get("kick"));
     f.snare = val("snare", src.get("snare"));
@@ -451,7 +468,7 @@ export class Studio {
     f.bass = val("bass", src.get("bass"));
     f.mid = val("mid", src.get("mid"));
     f.treble = val("treble", src.get("treble"));
-    const shape = muted.includes("spectrum") ? 0 : depth;
+    const shape = depth * this.reaction("spectrum");
     for (let i = 0; i < f.spectrum.length; i++) f.spectrum[i] = this.audio.spectrum[i] * shape;
     for (let i = 0; i < f.wave.length; i++) f.wave[i] = this.audio.scope[i] * shape;
     f.beats = this.beatsNow;
@@ -732,6 +749,14 @@ export class Studio {
       const source = ["kick", "snare", "hat", "tone", "lfoBar", "bass", "env"].find((id) => !routes.some((r) => r.source === id)) ?? "kick";
       const target = targets.find((t) => !routes.some((r) => r.target === t.id)) ?? targets[0];
       routes.push({ source, target: target.id, amount: 0.5 });
+      this.saveModel();
+      this.renderRoutes();
+    });
+    $("mod-restore").addEventListener("click", () => {
+      if (!this.def) return;
+      // Put back the deleted ones, at full strength, in the model's own order; the rest stay as set.
+      const kept = this.modelSettings.reactions;
+      this.modelSettings.reactions = defaultReactions(this.def).map((d) => kept.find((r) => r.source === d.source) ?? d);
       this.saveModel();
       this.renderRoutes();
     });
@@ -1406,7 +1431,7 @@ export class Studio {
     }
   }
 
-  /** Draw the modulation matrix: the model's built-in reactions, then its routes. */
+  /** Draw the modulation matrix: the model's built-in reactions beside the routes. */
   private renderRoutes(): void {
     this.sourceMeters = [];
     this.renderReactions();
@@ -1477,28 +1502,57 @@ export class Studio {
     this.showRouteBadges();
   }
 
-  /** List the model's built-in reactions, each with a switch and a live meter. */
+  /**
+   * The model's built-in reactions, as matrix rows: the sound it listens to,
+   * what it does, and how strongly, each one switchable and deletable.
+   */
   private renderReactions(): void {
-    const box = $("mod-reactions");
+    const box = $("mod-builtins");
     box.replaceChildren();
-    const reactions = this.def?.reactions ?? [];
-    if (reactions.length === 0) {
+    $("mod-builtins-title").textContent = this.def ? `Built into ${this.def.name}` : "Built into this model";
+    const all = this.def?.reactions ?? [];
+    if (all.length === 0) {
       box.append(el("p", { className: "muted", textContent: "This model doesn't react to music by itself; routes are how music reaches it." }));
-      return;
     }
-    for (const r of reactions) {
-      const input = el("input", { type: "checkbox", checked: !this.modelSettings.muted.includes(r.source) });
-      input.addEventListener("change", () => {
-        const muted = new Set(this.modelSettings.muted);
-        if (input.checked) muted.delete(r.source);
-        else muted.add(r.source);
-        this.modelSettings.muted = [...muted];
+    const rows = this.modelSettings.reactions;
+    for (const row of rows) {
+      const spec = all.find((r) => r.source === row.source);
+      if (!spec) continue;
+      const on = el("input", { type: "checkbox", checked: !row.off, title: "Switch this reaction on or off" });
+      const source = el("span", { className: "fixed", textContent: REACTION_LABELS[row.source], title: `Built into ${this.def!.name}: always listens to this sound` });
+      const meterFill = el("div", { className: "meter-fill" });
+      this.sourceMeters.push({ bar: meterFill, source: () => REACTION_METERS[row.source] });
+      const meter = el("div", { className: "meter-track", title: "What this sound is doing right now" }, meterFill);
+      const target = el("span", { className: "fixed builtin", title: spec.text }, el("span", { className: "tag", textContent: "Built-in" }), spec.label);
+      const amount = el("input", { type: "range", min: "0", max: "2", step: "0.05", value: String(row.amount), title: "How strongly the model reacts. 100% is as designed. Double-click for 100%." });
+      paintRange(amount);
+      const readout = el("span", { className: "readout", textContent: pct(row.amount) });
+      const setAmount = (v: number) => {
+        row.amount = v;
+        readout.textContent = pct(v);
+        paintRange(amount);
+        this.saveModel();
+      };
+      amount.addEventListener("input", () => setAmount(Number(amount.value)));
+      amount.addEventListener("dblclick", () => { amount.value = "1"; setAmount(1); });
+      const remove = el("button", { type: "button", textContent: "×", className: "small", title: "Remove this reaction (Restore built-ins brings it back)" });
+      remove.addEventListener("click", () => {
+        rows.splice(rows.indexOf(row), 1);
+        this.saveModel();
+        this.renderRoutes();
+      });
+      const r = el("div", { className: `route reaction-row${row.off ? " off" : ""}`, title: spec.text }, on, source, meter, el("span", { className: "muted", textContent: "→" }), target, amount, readout, remove);
+      on.addEventListener("change", () => {
+        row.off = !on.checked || undefined;
+        r.classList.toggle("off", !on.checked);
         this.saveModel();
       });
-      const fill = el("div", { className: "meter-fill" });
-      this.sourceMeters.push({ bar: fill, source: () => REACTION_METERS[r.source] });
-      box.append(el("label", { className: "reaction" }, input, el("span", { className: "reaction-role", textContent: REACTION_LABELS[r.source] }), el("div", { className: "meter-track" }, fill), el("span", { className: "muted", textContent: r.text })));
+      box.append(r);
     }
+    const missing = all.length - rows.length;
+    const restore = $("mod-restore");
+    restore.hidden = missing <= 0;
+    restore.textContent = `Restore built-ins (${missing})`;
   }
 
   /** Under each sidebar slider, name the routes pushing it. */
@@ -1538,6 +1592,34 @@ function knobValue(spec: ParamSpec, v: number): number | boolean | string {
   }
   if (spec.kind === "boolean") return v >= 0.5;
   return spec.options[Math.min(spec.options.length - 1, Math.floor(v * spec.options.length))].value;
+}
+
+/** Every built-in reaction of the model, on at full strength. */
+function defaultReactions(def: ModelDefinition): ReactionRow[] {
+  return (def.reactions ?? []).map((r) => ({ source: r.source, amount: 1 }));
+}
+
+/**
+ * The reaction rows from a save, keeping only the model's own and dropping
+ * anything malformed. Saves from before reactions were rows only listed
+ * those switched off, so every reaction comes back with those off.
+ */
+function savedReactions(def: ModelDefinition, saved: SavedModelSettings): ReactionRow[] {
+  if (!Array.isArray(saved.reactions)) {
+    const muted = saved.muted ?? [];
+    return defaultReactions(def).map((r) => (muted.includes(r.source) ? { ...r, off: true } : r));
+  }
+  const own = new Set((def.reactions ?? []).map((r) => r.source));
+  const seen = new Set<ReactionSource>();
+  return saved.reactions.filter((r) => {
+    if (!r || !own.has(r.source) || seen.has(r.source)) return false;
+    seen.add(r.source);
+    return true;
+  }).map((r) => ({
+    source: r.source,
+    amount: typeof r.amount === "number" && Number.isFinite(r.amount) ? Math.min(2, Math.max(0, r.amount)) : 1,
+    ...(r.off ? { off: true } : {}),
+  }));
 }
 
 function formatAmount(v: number): string {
