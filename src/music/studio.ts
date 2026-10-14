@@ -11,9 +11,10 @@ import {
   type GlobalPreset,
 } from "./globals";
 import {
-  BASS_STYLES, CHORD_STYLES, CHORD_WAVES, WOBBLE_RATE_LABELS, DRUM_RESETS, DRUMS, ECHO_TIME_LABELS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES,
+  BASS_STYLES, CHORD_STYLES, CHORD_WAVES, WOBBLE_RATE_LABELS, DRUM_MODES, DRUM_RESETS, DRUMS, ECHO_TIME_LABELS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES,
   STEPS, STYLES, SYNTH_WAVES, TRACKS, Sequencer, applyStyleDensities, chordName, faderGain, sanitizeState, type DrumKey, type SequencerState,
 } from "./sequencer";
+import { GRIDS_COLS, GRIDS_ROWS, gridsName } from "./grids";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -75,6 +76,10 @@ const decibels = (gain: number) => (gain <= 0.0001 ? "-∞ dB" : `${signed(Numbe
 const panLabel = (v: number) => (Math.abs(v) < 0.005 ? "C" : `${v < 0 ? "L" : "R"}${Math.round(Math.abs(v) * 100)}`);
 const octaves = (v: number) => (v === 0 ? "0" : signed(v, " oct"));
 const BASS_RANGE_LABELS = ["Root only", "+ octave", "+ fifth", "+ third", "+ low fifth", "+ seventh", "+ passing"];
+/** The drum map pad's height and the margin round its grid, in CSS pixels. */
+const PAD_WIDTH = 150;
+const PAD_HEIGHT = 104;
+const PAD_INSET = 8;
 /** Drum ring radii as a share of the canvas radius, kick innermost. */
 const RING_RADII = [0.4, 0.68, 0.94];
 
@@ -83,19 +88,23 @@ let liveSeq: Sequencer | null = null;
 
 function drumSpecs(key: DrumKey): ParamSpec[] {
   return [
+    { kind: "choice", key: `${key}Mode`, label: "Mode", options: DRUM_MODES, default: "euclid",
+      description: "Euclidean spreads Density's hits evenly; Grids reads a pattern off the drum map; Both plays the two together." },
     { kind: "number", key: `${key}Density`, label: "Density", min: 0, max: 1, step: 0.01, default: 0.3,
       format: () => {
         const n = liveSeq?.pulses(key) ?? 0;
         return `${n} hit${n === 1 ? "" : "s"}`;
       },
-      description: "How many hits the ring spreads evenly round its pattern." },
+      description: "How many euclidean hits the ring spreads evenly round its pattern." },
+    { kind: "number", key: `${key}Fill`, label: "Fill", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: "How much of the drum map's pattern plays: low keeps only its strongest hits, high adds every ghost note." },
     { kind: "number", key: `${key}Variation`, label: "Variation", min: 0, max: 1, step: 0.01, default: 0.3, format: pct,
-      description: "How much each bar strays: ghost notes, dropped hits and nudges." },
+      description: "How much each bar strays: ghost notes, dropped hits and nudges. On the drum map it also makes weak hits come and go." },
     { kind: "number", key: `${key}Length`, label: "Steps", min: 1, max: MAX_DRUM_LENGTH, step: 1, default: 16, format: (v) => `${v}`,
       description: "How many sixteenths the pattern has before it repeats. Anything but 16 drifts against the bar." },
     { kind: "number", key: `${key}Rotate`, label: "Offset", min: 0, max: MAX_DRUM_LENGTH - 1, step: 1, default: 0,
       format: (v) => `${liveSeq ? v % liveSeq.length(key) : v}`,
-      description: "Turns the pattern round its ring, so it starts on a different step." },
+      description: "Turns the euclidean hits round the ring, so they start on a different step. The drum map's grooves stay put." },
     { kind: "choice", key: `${key}Reset`, label: "Reset", options: DRUM_RESETS, default: "0",
       description: "Brings the pattern back to its start every so many bars." },
     { kind: "number", key: `${key}Volume`, label: "Volume", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.8,
@@ -138,6 +147,12 @@ const PARTS: { part: string; specs: ParamSpec[] }[] = [
       description: "Delays every second sixteenth for a shuffled feel." },
   ] },
   ...DRUMS.map((d) => ({ part: d.label, specs: drumSpecs(d.key) })),
+  { part: "Drum map", specs: [
+    { kind: "number", key: "gridsX", label: "Map X", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "Across the drum map: straight grooves on the left, broken and syncopated on the right." },
+    { kind: "number", key: "gridsY", label: "Map Y", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "Up the drum map: sparse half-time at the bottom, busy and frantic at the top." },
+  ] },
   { part: "Bass", specs: [
     { kind: "choice", key: "bassStyle", label: "Style", options: choices(BASS_STYLES), default: "pulse" },
     { kind: "number", key: "bassDensity", label: "Density", min: 0, max: 1, step: 0.01, default: 0.4, format: pct,
@@ -996,6 +1011,7 @@ export class Studio {
       // Steps and density change each other's readouts (hits, offset within the length),
       // and the mixer and the Master panel share some controls.
       if (/^(kick|snare|hat)(Length|Density|Rotate)$/.test(spec.key) || /^(echo|space|master)/.test(spec.key)) this.refreshSeqControls();
+      if (/^(kick|snare|hat)Mode$/.test(spec.key)) this.showDrumModes();
       this.seq.version++;
       this.saveGlobal();
     };
@@ -1110,6 +1126,9 @@ export class Studio {
       render(sound, soundOf(d.label));
     }
     this.buildRing();
+    render($("grids-controls"), specsOf("Drum map"));
+    this.buildGridsPad();
+    this.showDrumModes();
 
     render($("bass-controls"), patternOf("Bass"));
     render($("bass-sound"), soundOf("Bass"));
@@ -1222,12 +1241,109 @@ export class Studio {
     if (found.spec.kind === "choice" && next === values[key]) return;
     values[key] = next;
     if (key === "chordStyle") this.seq.refreshHarmony();
+    if (/^(kick|snare|hat)Mode$/.test(key)) this.showDrumModes();
     this.seq.version++;
     this.refreshSeqControls();
     this.saveGlobal();
   }
 
   private ringSize = 176;
+  private padCtx: CanvasRenderingContext2D | null = null;
+  /** What the pad last drew, so it only redraws when the map position or modes change. */
+  private padDrawn = "";
+
+  /** Dim the controls a drum's mode doesn't use, and the drum map when no drum reads it. */
+  private showDrumModes(): void {
+    const seq = this.settings.seq;
+    let anyMap = false;
+    for (const d of DRUMS) {
+      const mode = seq[`${d.key}Mode`];
+      if (mode !== "euclid") anyMap = true;
+      document.querySelector(`.param[data-target="gen:${d.key}Density"]`)?.classList.toggle("unused", mode === "grids");
+      document.querySelector(`.param[data-target="gen:${d.key}Fill"]`)?.classList.toggle("unused", mode === "euclid");
+      document.querySelector(`.param[data-target="gen:${d.key}Rotate"]`)?.classList.toggle("unused", mode === "grids");
+    }
+    $("grids-map").classList.toggle("unused", !anyMap);
+    this.padDrawn = "";
+    this.drawGridsPad();
+  }
+
+  /** The drum map as an X/Y pad: drag the dot to move round it, double-click for the style's spot. */
+  private buildGridsPad(): void {
+    const pad = $<HTMLCanvasElement>("grids-pad");
+    const dpr = window.devicePixelRatio || 1;
+    pad.width = Math.round(PAD_WIDTH * dpr);
+    pad.height = Math.round(PAD_HEIGHT * dpr);
+    this.padCtx = pad.getContext("2d");
+    this.padCtx?.scale(dpr, dpr);
+    const seq = this.settings.seq;
+    const move = (e: PointerEvent) => {
+      const r = pad.getBoundingClientRect();
+      const x = Math.max(0, Math.min(1, (e.clientX - r.left - PAD_INSET) / (r.width - 2 * PAD_INSET)));
+      const y = Math.max(0, Math.min(1, 1 - (e.clientY - r.top - PAD_INSET) / (r.height - 2 * PAD_INSET)));
+      seq.gridsX = Math.round(x * 100) / 100;
+      seq.gridsY = Math.round(y * 100) / 100;
+      this.seq.version++;
+      this.refreshSeqControls();
+      this.drawGridsPad();
+    };
+    let dragging = false;
+    pad.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      pad.setPointerCapture(e.pointerId);
+      move(e);
+    });
+    pad.addEventListener("pointermove", (e) => { if (dragging) move(e); });
+    const end = () => {
+      if (!dragging) return;
+      dragging = false;
+      this.saveGlobal();
+    };
+    pad.addEventListener("pointerup", end);
+    pad.addEventListener("pointercancel", end);
+    pad.addEventListener("dblclick", () => {
+      [seq.gridsX, seq.gridsY] = (STYLES[seq.style] ?? STYLES.broken).map;
+      this.seq.version++;
+      this.refreshSeqControls();
+      this.drawGridsPad();
+      this.saveGlobal();
+    });
+  }
+
+  private drawGridsPad(): void {
+    const g = this.padCtx;
+    if (!g) return;
+    const seq = this.settings.seq;
+    const drawn = `${seq.gridsX}|${seq.gridsY}`;
+    if (drawn === this.padDrawn) return;
+    this.padDrawn = drawn;
+    const w = PAD_WIDTH, h = PAD_HEIGHT, i = PAD_INSET;
+    const px = (x: number) => i + x * (w - 2 * i), py = (y: number) => h - i - y * (h - 2 * i);
+    g.clearRect(0, 0, w, h);
+    // The map's patterns sit on a grid; between them they blend.
+    g.fillStyle = "#30363d";
+    for (let r = 0; r < GRIDS_ROWS; r++) {
+      for (let c = 0; c < GRIDS_COLS; c++) {
+        g.beginPath();
+        g.arc(px(c / (GRIDS_COLS - 1)), py(r / (GRIDS_ROWS - 1)), 2, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+    const x = px(seq.gridsX), y = py(seq.gridsY);
+    g.strokeStyle = "rgba(255, 138, 76, 0.35)";
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(x, i);
+    g.lineTo(x, h - i);
+    g.moveTo(i, y);
+    g.lineTo(w - i, y);
+    g.stroke();
+    g.fillStyle = "#ff8a4c";
+    g.beginPath();
+    g.arc(x, y, 5, 0, Math.PI * 2);
+    g.fill();
+    $("grids-name").textContent = gridsName(seq.gridsX, seq.gridsY);
+  }
 
   /** The drum rings: drag one round to turn its pattern, double-click to put it back. */
   private buildRing(): void {
@@ -1294,7 +1410,10 @@ export class Studio {
       m.dial.meter(m.level);
     }
     const track = this.settings.mixerTrack;
-    if (track === "drums") this.drawRing();
+    if (track === "drums") {
+      this.drawRing();
+      this.drawGridsPad();
+    }
     else if (track === "melody") this.drawMelody();
     else if (track === "chords") this.drawChords();
   }
