@@ -813,7 +813,7 @@ class ModalEngine implements Engine {
 }
 
 /** Output level per engine, so they sit at about the same loudness. */
-const ENGINE_GAIN = [0.47, 0.72, 0.53, 0.82, 1.18, 1.2, 3.2, 1.7];
+const ENGINE_GAIN = [0.66, 0.72, 0.53, 0.82, 0.7, 0.96, 1.6, 0.77];
 
 function makeEngine(kind: number, chord: boolean): Engine {
   switch (kind) {
@@ -1008,7 +1008,9 @@ class Voice {
         buf[i] += sine(this.subPhase) * patch.sub * 0.6;
       }
     }
-    const scale = (ENGINE_GAIN[patch.engine] * level * this.velocity) / Math.sqrt(this.count);
+    // Struck engines spend most of a chord decaying, so chords of them get a lift.
+    const lift = self && this.chord ? 2 : 1;
+    const scale = (ENGINE_GAIN[patch.engine] * lift * level * this.velocity) / Math.sqrt(this.count);
     const g0 = this.gain, gStep = (gain - g0) / CB;
     if (self) {
       for (let i = 0; i < CB; i++) {
@@ -1058,7 +1060,7 @@ interface Pending {
 /** Bass, chords and melody, each a pool of Plaits voices. */
 export class Synth {
   readonly tracks = [
-    new Track(1, false, true, 1),
+    new Track(1, false, true, 0.8),
     new Track(3, true, false, 0.42),
     new Track(4, false, false, 0.55),
   ];
