@@ -3,8 +3,8 @@
 # Works on Arch and Arch-based distros (CachyOS, EndeavourOS, Manjaro, ...).
 
 pkgname=tonefield
-pkgver=0.3.0
-pkgrel=1
+pkgver=0.2.1
+pkgrel=2
 pkgdesc="Music-driven visualizer"
 arch=('x86_64' 'aarch64')
 url="https://github.com/thomas-nelson23/tonefield"
