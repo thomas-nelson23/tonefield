@@ -135,8 +135,17 @@ export class ColourGrade {
     return true;
   }
 
-  /** Show the canvas through `grade`. Call once per frame, after the model has drawn. */
-  draw(grade: Grade): void {
+  private last: Grade | null = null;
+
+  /**
+   * Show the canvas through `grade`. Call once per frame, after the model has
+   * drawn; `changed` false says the canvas is as it was, so only a change of
+   * grade needs the picture copied and coloured again.
+   */
+  draw(grade: Grade, changed = true): void {
+    const l = this.last;
+    if (!changed && l && l.hue === grade.hue && l.saturation === grade.saturation && l.brightness === grade.brightness && l.contrast === grade.contrast && l.invert === grade.invert) return;
+    this.last = { ...grade };
     if (isNeutral(grade)) {
       this.show(null, "");
       // A trial cut short starts over next time, so idle frames don't skew it.

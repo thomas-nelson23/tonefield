@@ -59,10 +59,24 @@ export function uniformDir(mode: string, time = 0): [number, number] {
  * instead of jittering across it.
  */
 export function gravityAt(mode: string, g: number, x: number, y: number, w: number, h: number, time = 0, soft = 40): [number, number] {
-  if (g === 0 || mode === "off") return [0, 0];
+  const out: [number, number] = [0, 0];
+  gravityTo(out, mode, g, x, y, w, h, time, soft);
+  return out;
+}
+
+/**
+ * `gravityAt` written into `out` (as [x, y]) instead of a new array, for the
+ * loops that ask once per body per step.
+ */
+export function gravityTo(out: Float64Array | [number, number], mode: string, g: number, x: number, y: number, w: number, h: number, time = 0, soft = 40): void {
+  out[0] = 0;
+  out[1] = 0;
+  if (g === 0 || mode === "off") return;
   if (isUniform(mode)) {
     const [dx, dy] = uniformDir(mode, time);
-    return [dx * g, dy * g];
+    out[0] = dx * g;
+    out[1] = dy * g;
+    return;
   }
   let tx: number, ty: number;
   switch (mode) {
@@ -74,23 +88,29 @@ export function gravityAt(mode: string, g: number, x: number, y: number, w: numb
       // Straight at whichever edge is closest.
       const dl = x, dr = w - x, dt = y, db = h - y;
       const m = Math.min(dl, dr, dt, db);
-      if (m === dl) return [-g, 0];
-      if (m === dr) return [g, 0];
-      if (m === dt) return [0, -g];
-      return [0, g];
+      if (m === dl) out[0] = -g;
+      else if (m === dr) out[0] = g;
+      else if (m === dt) out[1] = -g;
+      else out[1] = g;
+      return;
     }
     default:
       tx = w / 2;
       ty = h / 2;
   }
   const dx = tx - x, dy = ty - y;
-  const d = Math.hypot(dx, dy) || 1;
+  const d = Math.sqrt(dx * dx + dy * dy) || 1;
   const ease = d / (d + soft);
   const ux = dx / d, uy = dy / d;
-  if (mode === "outward") return [-ux * g, -uy * g];
-  if (mode === "swirl") {
+  if (mode === "outward") {
+    out[0] = -ux * g;
+    out[1] = -uy * g;
+  } else if (mode === "swirl") {
     // Mostly sideways around the centre, with a little inward pull to keep the orbit.
-    return [(-uy * 0.85 + ux * 0.35) * g * ease, (ux * 0.85 + uy * 0.35) * g * ease];
+    out[0] = (-uy * 0.85 + ux * 0.35) * g * ease;
+    out[1] = (ux * 0.85 + uy * 0.35) * g * ease;
+  } else {
+    out[0] = ux * g * ease;
+    out[1] = uy * g * ease;
   }
-  return [ux * g * ease, uy * g * ease];
 }

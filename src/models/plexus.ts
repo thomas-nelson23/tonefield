@@ -1,7 +1,7 @@
-import type { ModelDefinition, MusicFrame, NoteEvent, ParamValues, PointerInput, SimulationModel, Viewport } from "./types";
+import { jitterScale, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { noteHash, noteHue } from "./lib/music";
 import { Feedback, applyFeedback, colourParam, feedbackParams, glowSprite, schemeHue } from "./lib/visual";
-import { gravityAt, gravityModeParam, isUniform } from "./lib/gravity";
+import { gravityTo, gravityModeParam, isUniform } from "./lib/gravity";
 
 /** Patterns where nodes roam freely and link up by distance; the rest are laid out in shapes. */
 const FREE = new Set(["web", "stars"]);
@@ -95,6 +95,7 @@ class PlexusSim implements SimulationModel {
   private arrHue = new Float32Array(MAX_PACKETS);
 
   private shocks: { x: number; y: number; r: number; life: number }[] = [];
+  private grav = new Float64Array(2);
   private pointer: { x: number; y: number; repel: boolean } | null = null;
   private fb = new Feedback();
   private stepped = false;
@@ -400,29 +401,38 @@ class PlexusSim implements SimulationModel {
     const k = omega * omega, damp = 2 * omega * (1 - (p.bounce as number) * 0.9);
     const speed = (p.drift as number) * (1 + (p.warp as number) * Math.min(1.5, m.level) * 1.5);
     const gMode = p.gravityMode as string, gStrength = p.fieldGravity as number;
-    const uniform = isUniform(gMode);
-    const [ugx, ugy] = uniform ? gravityAt(gMode, gStrength, 0, 0, width, height, this.time) : [0, 0];
+    const uniform = isUniform(gMode), grav = this.grav;
+    if (uniform) gravityTo(grav, gMode, gStrength, 0, 0, width, height, this.time);
+    const ugx = grav[0], ugy = grav[1];
     const fade = Math.min(1, dt * 3);
+    const sparkFade = Math.exp(-dt * 4);
+    const headStep = 3 * jitterScale(dt);
+    const shocks = this.shocks, nShocks = shocks.length;
+    const pointer = this.pointer;
     const pr = Math.min(width, height) * 0.25;
     const ease = Math.min(1, dt * 1.2);
     // Free nodes wrap round a band just off screen, so they slip out of view instead of piling up on the edges.
     const margin = Math.min(width, height) * 0.05;
     for (let i = 0; i < n; i++) {
       this.vis[i] += (this.used[i] - this.vis[i]) * fade;
-      this.spark[i] *= Math.exp(-dt * 4);
+      this.spark[i] *= sparkFade;
       let fx = ugx, fy = ugy;
-      if (!uniform) [fx, fy] = gravityAt(gMode, gStrength, x[i], y[i], width, height, this.time, 60);
-      if (this.pointer) {
-        const dx = this.pointer.x - x[i], dy = this.pointer.y - y[i];
-        const d = Math.hypot(dx, dy) + 1;
+      if (!uniform) {
+        gravityTo(grav, gMode, gStrength, x[i], y[i], width, height, this.time, 60);
+        fx = grav[0]; fy = grav[1];
+      }
+      if (pointer) {
+        const dx = pointer.x - x[i], dy = pointer.y - y[i];
+        const d = Math.sqrt(dx * dx + dy * dy) + 1;
         if (d < pr) {
-          const f = (this.pointer.repel ? -1 : 1) * (1 - d / pr) * 3000;
+          const f = (pointer.repel ? -1 : 1) * (1 - d / pr) * 3000;
           fx += (dx / d) * f; fy += (dy / d) * f;
         }
       }
-      for (const sh of this.shocks) {
+      for (let k = 0; k < nShocks; k++) {
+        const sh = shocks[k];
         const dx = x[i] - sh.x, dy = y[i] - sh.y;
-        const d = Math.hypot(dx, dy) + 1;
+        const d = Math.sqrt(dx * dx + dy * dy) + 1;
         const band = Math.abs(d - sh.r);
         if (band > 40) continue;
         const f = (1 - band / 40) * sh.life;
@@ -430,7 +440,7 @@ class PlexusSim implements SimulationModel {
         this.spark[i] = Math.max(this.spark[i], f * 0.8);
       }
       if (free || !this.used[i]) {
-        this.head[i] += (Math.random() - 0.5) * dt * 3;
+        this.head[i] += (Math.random() - 0.5) * headStep;
         const sp = speed * this.pace[i];
         vx[i] += (Math.cos(this.head[i]) * sp - vx[i]) * ease + fx * dt;
         vy[i] += (Math.sin(this.head[i]) * sp - vy[i]) * ease + fy * dt;
@@ -681,7 +691,7 @@ class PlexusSim implements SimulationModel {
         g.fill(path);
       }
     }
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = g.getTransform().a || 1;
     const glow = Math.max(1, p.nodeSize as number) * (1 + Math.min(1, m.treble) * 0.6);
     for (let i = 0, drawn = 0; i < n && drawn < MAX_GLOWS; i++) {
       const sp = this.spark[i] * vis[i];

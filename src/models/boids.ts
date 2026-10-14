@@ -1,7 +1,7 @@
-import type { ModelDefinition, MusicFrame, NoteEvent, ParamValues, PointerInput, SimulationModel, Viewport } from "./types";
+import { jitterScale, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { noteHash, noteHue } from "./lib/music";
 import { Feedback, applyFeedback, colourParam, feedbackParams, schemeHue } from "./lib/visual";
-import { gravityAt, gravityModeParam, isUniform } from "./lib/gravity";
+import { gravityTo, gravityModeParam, isUniform } from "./lib/gravity";
 
 interface Boid {
   x: number;
@@ -42,6 +42,8 @@ class BoidsSim implements SimulationModel {
   /** Spatial grid: first bird in each cell, and the next bird in the same cell. */
   private head = new Int32Array(0);
   private next = new Int32Array(0);
+  /** Scratch for the gravity field, so the per-bird loop allocates nothing. */
+  private grav = new Float64Array(2);
 
   reset(view: Viewport, p: ParamValues): void {
     this.view = view;
@@ -72,8 +74,16 @@ class BoidsSim implements SimulationModel {
     const { width, height } = this.view;
     this.time += dt;
     const gMode = p.gravityMode as string, gStrength = p.fieldGravity as number;
-    const [ugx, ugy] = isUniform(gMode) ? gravityAt(gMode, gStrength, 0, 0, width, height, this.time) : [0, 0];
+    const uniform = isUniform(gMode), grav = this.grav;
+    if (uniform) gravityTo(grav, gMode, gStrength, 0, 0, width, height, this.time);
+    const ugx = uniform ? grav[0] : 0, ugy = uniform ? grav[1] : 0;
     this.scatter = p.scatter as number;
+    this.flash *= Math.exp(-dt * 6.3);
+    // Random steering is a random walk: smaller steps take proportionally smaller nudges.
+    const wanderStep = wander * 2 * jitterScale(dt);
+    const lures = this.lures, nLures = lures.length;
+    const vortex = this.vortex;
+    const pointer = this.pointer;
 
     // Bin the birds into a grid of vision-radius cells, as linked lists in typed arrays
     // (no per-step allocations, so no garbage-collector hitches).
@@ -93,6 +103,7 @@ class BoidsSim implements SimulationModel {
       head[k] = i;
     }
 
+    const sparkFade = Math.exp(-dt * 5);
     for (const b of boids) {
       let ax = 0, ay = 0, cx = 0, cy = 0, sx = 0, sy = 0, n = 0, hx = 0, hy = 0;
       const gx = Math.min(cols - 1, Math.max(0, Math.floor(b.x / cell)));
@@ -136,47 +147,48 @@ class BoidsSim implements SimulationModel {
         b.hx += (Math.cos(t) - b.hx) * tint;
         b.hy += (Math.sin(t) - b.hy) * tint;
       }
-      const hl = Math.hypot(b.hx, b.hy) || 1;
+      const hl = Math.sqrt(b.hx * b.hx + b.hy * b.hy) || 1;
       b.hx /= hl; b.hy /= hl;
-      b.spark *= Math.exp(-dt * 5);
-      if (this.vortex) {
-        const dx = b.x - this.vortex.x, dy = b.y - this.vortex.y;
-        const d = Math.hypot(dx, dy) + 30;
-        const s = (this.vortex.dir * this.vortex.life * 200000) / (d * d) * 30;
+      b.spark *= sparkFade;
+      if (vortex) {
+        const dx = b.x - vortex.x, dy = b.y - vortex.y;
+        const d = Math.sqrt(dx * dx + dy * dy) + 30;
+        const s = (vortex.dir * vortex.life * 200000) / (d * d) * 30;
         fx += (-dy / d) * s - (dx / d) * s * 0.3;
         fy += (dx / d) * s - (dy / d) * s * 0.3;
       }
       if (wander > 0) {
         // Random steering, so the flock frays and wobbles.
-        fx += (Math.random() - 0.5) * 2 * wander;
-        fy += (Math.random() - 0.5) * 2 * wander;
+        fx += (Math.random() - 0.5) * wanderStep;
+        fy += (Math.random() - 0.5) * wanderStep;
       }
-      for (const l of this.lures) {
+      for (let k = 0; k < nLures; k++) {
+        const l = lures[k];
         const dx = l.x - b.x, dy = l.y - b.y;
-        const d = Math.hypot(dx, dy) + 1;
+        const d = Math.sqrt(dx * dx + dy * dy) + 1;
         const s = (l.strength * l.life * 3000 * lurePull) / d;
         fx += (dx / d) * s;
         fy += (dy / d) * s;
       }
-      if (isUniform(gMode)) { fx += ugx; fy += ugy; }
+      if (uniform) { fx += ugx; fy += ugy; }
       else {
-        const [gx2, gy2] = gravityAt(gMode, gStrength, b.x, b.y, width, height, this.time, 60);
-        fx += gx2; fy += gy2;
+        gravityTo(grav, gMode, gStrength, b.x, b.y, width, height, this.time, 60);
+        fx += grav[0]; fy += grav[1];
       }
       // A gentle pull home keeps the flock on screen between kicks.
       fx += (width / 2 - b.x) * home;
       fy += (height / 2 - b.y) * home;
-      if (this.pointer) {
-        const dx = this.pointer.x - b.x;
-        const dy = this.pointer.y - b.y;
-        const d = Math.hypot(dx, dy) + 1;
-        const s = (this.pointer.repel ? -1 : 1) * 4000 / d;
+      if (pointer) {
+        const dx = pointer.x - b.x;
+        const dy = pointer.y - b.y;
+        const d = Math.sqrt(dx * dx + dy * dy) + 1;
+        const s = (pointer.repel ? -1 : 1) * 4000 / d;
         fx += (dx / d) * s;
         fy += (dy / d) * s;
       }
       b.vx += fx * dt;
       b.vy += fy * dt;
-      const speed = Math.hypot(b.vx, b.vy);
+      const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
       const minSpeed = maxSpeed * 0.3;
       if (speed > maxSpeed) { b.vx *= maxSpeed / speed; b.vy *= maxSpeed / speed; }
       else if (speed < minSpeed && speed > 0) { b.vx *= minSpeed / speed; b.vy *= minSpeed / speed; }
@@ -248,7 +260,6 @@ class BoidsSim implements SimulationModel {
     this.stepped = false;
     const z = p.size as number;
     const streak = (p.streak as number) * (1 + Math.min(1.5, m.bass) * 1.2);
-    this.flash *= 0.9;
     const light = 48 + this.flash * 20 + Math.min(1, m.level) * 8;
     // Streaks, batched by hue so each colour is one stroke.
     const paths = Array.from({ length: HUE_BUCKETS }, () => new Path2D());

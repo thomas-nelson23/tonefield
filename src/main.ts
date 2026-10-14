@@ -22,14 +22,34 @@ const statsEl = $<HTMLElement>("stats");
 const randomizeBtn = $<HTMLButtonElement>("randomize");
 const docTitle = $<HTMLElement>("doc-title");
 const docState = $<HTMLElement>("doc-state");
+const scaleSelect = $<HTMLSelectElement>("render-scale");
 
-const MAX_STEPS_PER_FRAME = 8;
 /**
- * Milliseconds of simulation per frame before the loop stops catching up.
- * Without it a heavy model that misses one frame runs extra steps the next,
- * which makes that frame later still, and it spirals down to a few fps.
+ * Most simulation steps in one frame. A frame that took longer than this many
+ * nominal steps runs the simulation slower rather than later: a heavy model
+ * that misses one frame would otherwise run extra steps the next, make that
+ * frame later still, and spiral down to a few fps.
  */
+const MAX_STEPS_PER_FRAME = 4;
+/** Milliseconds of simulation per frame before the loop stops catching up, for the same reason. */
 const STEP_BUDGET_MS = 12;
+/** The nominal step: frames at 60 Hz step once; faster screens take smaller steps, slower ones more of them. */
+const NOMINAL_DT = 1 / 60;
+/** Longest single step the models are asked to take; time past it is dropped. */
+const MAX_DT = 1 / 30;
+
+/**
+ * Render scale: the canvas can be drawn at fewer pixels than the screen has
+ * and stretched up. That cuts the models' own drawing time on a big monitor;
+ * whether it helps the frame rate depends on the webview: with GPU
+ * compositing it does, while a software-composited webview spends as long
+ * stretching the picture as it saved. "auto" steps down while the frame
+ * rate is under 55, keeps the step only if it helped, and goes back up once
+ * 58 has held for a while.
+ */
+const SCALE_NOTCHES = [1, 0.85, 0.7, 0.6, 0.5];
+type ScaleMode = "auto" | "1" | "0.75" | "0.5";
+const SCALE_LABELS: Record<ScaleMode, string> = { auto: "Auto", "1": "Full", "0.75": "75%", "0.5": "50%" };
 
 let def: ModelDefinition;
 let model: SimulationModel;
@@ -42,10 +62,19 @@ let paramControls: ParamControls | null = null;
 let music: MusicFrame = SILENT_MUSIC;
 let view: Viewport = { width: 1, height: 1 };
 let running = true;
-let accumulator = 0;
 let lastTime = performance.now();
 let fps = 0;
 let statsShown = 0;
+/** Smoothed milliseconds per frame spent stepping and drawing, for the status bar. */
+let simMs = 0;
+let drawMs = 0;
+/** The canvas shows something older than the model's state, so the next frame must draw. */
+let dirty = true;
+let scaleMode: ScaleMode = "auto";
+/** The canvas's pixels per CSS pixel, as a share of the screen's. */
+let renderScale = 1;
+/** Auto scale: frames and their total time since the last decision, and how long a raise has to wait. */
+const auto = { frames: 0, ms: 0, since: 0, steady: 0, raiseWait: 3, raisedAt: -Infinity, lowerWait: 0, before: 0 };
 
 const studio = new Studio();
 const grade = new ColourGrade(canvas);
@@ -79,7 +108,7 @@ function loadModel(id: string): void {
   effective = { ...params };
   model = def.create();
   model.reset(view, effective);
-  accumulator = 0;
+  dirty = true;
   // Models that paint their own background would otherwise fade in over the previous one.
   g.fillStyle = "#0d1117";
   g.fillRect(0, 0, view.width, view.height);
@@ -90,6 +119,7 @@ function loadModel(id: string): void {
     if (spec.resetOnChange) {
       effective[spec.key] = params[spec.key];
       model.reset(view, effective);
+      dirty = true;
     }
   };
   const controls = (paramControls = renderParamControls(paramsEl, def.params, params, onChange));
@@ -127,23 +157,97 @@ function randomizeParams(): void {
     }
   }
   paramControls?.refresh();
-  if (rebuild) model.reset(view, effective);
+  if (rebuild) {
+    model.reset(view, effective);
+    dirty = true;
+  }
 }
 
 // ---- Canvas sizing ---------------------------------------------------------
 
+/** Size the canvas to the stage at the render scale; tells the model only when the stage itself changed. */
 function resize(): void {
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = (window.devicePixelRatio || 1) * renderScale;
   const rect = stage.getBoundingClientRect();
+  const changed = rect.width !== view.width || rect.height !== view.height;
   view = { width: Math.max(1, rect.width), height: Math.max(1, rect.height) };
-  canvas.width = Math.round(view.width * dpr);
-  canvas.height = Math.round(view.height * dpr);
+  canvas.width = Math.max(1, Math.round(view.width * dpr));
+  canvas.height = Math.max(1, Math.round(view.height * dpr));
   canvas.style.width = `${view.width}px`;
   canvas.style.height = `${view.height}px`;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  if (!model) return;
+  dirty = true;
+  if (!model || !changed) return;
   if (model.resize) model.resize(view);
   else model.reset(view, effective);
+}
+
+/** Change the render scale, keeping the picture: the canvas is cleared by the resize, so the model redraws from its state. */
+function setRenderScale(scale: number): void {
+  if (scale === renderScale) return;
+  renderScale = scale;
+  resize();
+}
+
+function setScaleMode(mode: ScaleMode): void {
+  scaleMode = mode;
+  scaleSelect.value = mode;
+  auto.frames = auto.ms = auto.steady = auto.before = 0;
+  if (mode !== "auto") setRenderScale(Number(mode));
+  try {
+    localStorage.setItem("ui:renderScale", mode);
+  } catch {
+    // Only a convenience.
+  }
+}
+
+/**
+ * Auto mode, once a second: step the scale down while frames take longer than
+ * 55 a second allow, and back up after 58 has held for a while. A step down
+ * that didn't make frames at least a tenth faster is undone, and the next try
+ * waits longer each time: where the webview's own repaint is the cost, fewer
+ * canvas pixels don't help and only soften the picture. A raise that is undone
+ * soon after also makes the next one wait twice as long, so a scene on the
+ * edge settles instead of flickering between two sizes.
+ */
+function autoScale(frameMs: number): void {
+  auto.frames++;
+  auto.ms += frameMs;
+  auto.since += frameMs;
+  if (auto.since < 1000) return;
+  const avg = auto.ms / auto.frames;
+  auto.frames = auto.ms = auto.since = 0;
+  const notch = SCALE_NOTCHES.indexOf(renderScale);
+  const now = performance.now() / 1000;
+  if (auto.before > 0) {
+    // The frame after a step down: keep it only if it paid off.
+    const helped = avg < auto.before * 0.9;
+    auto.before = 0;
+    if (!helped) {
+      setRenderScale(SCALE_NOTCHES[notch - 1]);
+      auto.lowerWait = Math.min(120, Math.max(10, auto.lowerWait * 2));
+      auto.steady = 0;
+      return;
+    }
+  }
+  if (avg > 1000 / 55) {
+    auto.steady = 0;
+    if (auto.lowerWait > 0) auto.lowerWait--;
+    else if (notch < SCALE_NOTCHES.length - 1) {
+      if (now - auto.raisedAt < 5) auto.raiseWait = Math.min(60, auto.raiseWait * 2);
+      auto.before = avg;
+      setRenderScale(SCALE_NOTCHES[notch + 1]);
+    }
+  } else if (avg <= 1000 / 58) {
+    auto.steady += 1;
+    if (notch > 0 && auto.steady >= auto.raiseWait) {
+      auto.steady = 0;
+      auto.raisedAt = now;
+      setRenderScale(SCALE_NOTCHES[notch - 1]);
+    }
+  } else {
+    auto.steady = 0;
+  }
 }
 
 // ---- Input -----------------------------------------------------------------
@@ -190,8 +294,20 @@ function setRunning(value: boolean): void {
 }
 
 playPause.addEventListener("click", () => setRunning(!running));
-stepBtn.addEventListener("click", () => model.step(def.fixedDt ?? 1 / 60, effective, music));
-resetBtn.addEventListener("click", () => model.reset(view, effective));
+const stepOnce = () => {
+  model.step(NOMINAL_DT, effective, music);
+  dirty = true;
+};
+const resetModel = () => {
+  model.reset(view, effective);
+  dirty = true;
+};
+stepBtn.addEventListener("click", stepOnce);
+resetBtn.addEventListener("click", resetModel);
+scaleSelect.addEventListener("change", () => {
+  setScaleMode(scaleSelect.value as ScaleMode);
+  scaleSelect.blur();
+});
 select.addEventListener("change", () => loadModel(select.value));
 randomizeBtn.addEventListener("click", () => {
   randomizeParams();
@@ -202,9 +318,9 @@ window.addEventListener("keydown", (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
   if (e.code === "Space") { e.preventDefault(); setRunning(!running); }
   else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); studio.toggleSequencer(); }
-  else if (e.key === "r") model.reset(view, effective);
+  else if (e.key === "r") resetModel();
   else if (e.key.toLowerCase() === "s" && !e.ctrlKey && !e.metaKey && !e.altKey) toggleSidebar();
-  else if (e.key === "." && !running) model.step(def.fixedDt ?? 1 / 60, effective, music);
+  else if (e.key === "." && !running) stepOnce();
 });
 
 // ---- Main loop -------------------------------------------------------------
@@ -213,6 +329,7 @@ function frame(now: number): void {
   const elapsed = Math.min((now - lastTime) / 1000, 0.25);
   lastTime = now;
   fps = fps * 0.9 + (elapsed > 0 ? 1 / elapsed : 0) * 0.1;
+  if (scaleMode === "auto") autoScale(elapsed * 1000);
 
   const notes = studio.frame(now / 1000, elapsed);
   studio.apply(effective);
@@ -224,35 +341,45 @@ function frame(now: number): void {
     }
   }
 
-  if (running) {
-    // Fixed-timestep integration keeps physics stable on 60Hz and 120Hz screens alike.
-    const dt = def.fixedDt ?? 1 / 60;
-    accumulator += elapsed;
-    let steps = 0;
+  if (running && elapsed > 0) {
+    // The simulation advances by the time the frame took, in steps no longer
+    // than a 30th of a second (and ideally a 60th) so the physics stay stable:
+    // a 244 Hz screen takes one small step a frame and moves just as smoothly,
+    // a slow frame takes a few. Time the budget can't cover is dropped.
+    const steps = Math.min(MAX_STEPS_PER_FRAME, Math.max(1, Math.ceil(elapsed / NOMINAL_DT - 1e-6)));
+    const dt = Math.min(MAX_DT, elapsed / steps);
     const start = performance.now();
-    while (accumulator >= dt) {
-      if (steps === MAX_STEPS_PER_FRAME || (steps > 0 && performance.now() - start > STEP_BUDGET_MS)) {
-        accumulator = 0; // drop time rather than spiral
-        break;
-      }
+    for (let i = 0; i < steps; i++) {
+      if (i > 0 && performance.now() - start > STEP_BUDGET_MS) break;
       model.step(dt, effective, music);
-      accumulator -= dt;
-      steps++;
     }
+    simMs += (performance.now() - start - simMs) * 0.1;
+    dirty = true;
   }
 
-  if (!def.paintsBackground) {
-    g.fillStyle = "#0d1117";
-    g.fillRect(0, 0, view.width, view.height);
+  // Nothing moved (paused, or a screen refreshing faster than the model steps):
+  // drawing again would only stack the models' additive strokes up on an unfaded picture.
+  if (dirty) {
+    dirty = false;
+    const drawStart = performance.now();
+    if (!def.paintsBackground) {
+      g.fillStyle = "#0d1117";
+      g.fillRect(0, 0, view.width, view.height);
+    }
+    model.render(g, view, effective, music);
+    grade.draw(studio.grade(), true);
+    drawMs += (performance.now() - drawStart - drawMs) * 0.1;
+  } else {
+    grade.draw(studio.grade(), false);
   }
-  model.render(g, view, effective, music);
-  grade.draw(studio.grade());
 
   // A few times a second is plenty, and saves a sidebar re-layout every frame.
   if (now - statsShown > 250) {
     statsShown = now;
     const extra = model.stats?.();
-    statsEl.textContent = `${Math.round(fps)} fps${extra ? ` · ${extra}` : ""}`;
+    const scale = renderScale < 1 ? ` · drawn at ${Math.round(renderScale * 100)}%` : "";
+    statsEl.textContent = `${Math.round(fps)} fps${scale} · sim ${simMs.toFixed(1)} ms · draw ${drawMs.toFixed(1)} ms${extra ? ` · ${extra}` : ""}`;
+    (window as unknown as { __perf: unknown }).__perf = { fps, simMs, drawMs, renderScale, model: def.id };
   }
   requestAnimationFrame(frame);
 }
@@ -262,6 +389,22 @@ function frame(now: number): void {
 setupPanels();
 const toggleSidebar = setupSidebarToggle();
 populateModelSelect();
+for (const [value, label] of Object.entries(SCALE_LABELS)) {
+  const opt = document.createElement("option");
+  opt.value = value;
+  opt.textContent = label;
+  scaleSelect.append(opt);
+}
+{
+  let mode: ScaleMode = "auto";
+  try {
+    const saved = localStorage.getItem("ui:renderScale");
+    if (saved && saved in SCALE_LABELS) mode = saved as ScaleMode;
+  } catch {
+    // Auto it is.
+  }
+  setScaleMode(mode);
+}
 resize();
 let initial = models[0].id;
 try {

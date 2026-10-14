@@ -1,27 +1,13 @@
-import type { ModelDefinition, MusicFrame, NoteEvent, ParamValues, PointerInput, SimulationModel, Viewport } from "./types";
+import { NOMINAL_DT, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { noteHash } from "./lib/music";
 import { Raster, hsl, palette } from "./lib/raster";
 import { Feedback, applyFeedback, colourParam, feedbackParams, hueToward } from "./lib/visual";
-import { gravityAt, gravityModeParam, isUniform } from "./lib/gravity";
-
-/** Milliseconds per frame the reaction may spend iterating; see `step`. */
-const ITERATION_BUDGET_MS = 7;
+import { gravityModeParam } from "./lib/gravity";
+import { GrayScott, type Paint, type StepRequest } from "./lib/grayscott";
+import type { WorkerIn, WorkerOut } from "./lib/grayscott.worker";
 
 /** Most pixels the ink is coloured at before the canvas stretches it; see `render`. */
 const RENDER_PIXEL_BUDGET = 1_600_000;
-
-/** How far fully fed brush strokes lower the kill rate, enough to keep a drawn line alive. */
-const HOLD_KILL = 0.007;
-
-/** Feed and kill rates for well-known Gray–Scott regimes. */
-const PRESETS: Record<string, [number, number]> = {
-  coral: [0.0545, 0.062],
-  mitosis: [0.0367, 0.0649],
-  fingerprints: [0.037, 0.06],
-  maze: [0.029, 0.057],
-  bubbles: [0.098, 0.0555],
-  waves: [0.014, 0.045],
-};
 
 const PALETTES: Record<string, Uint32Array> = {
   ice: palette([[0, 8, 12, 22], [0.25, 10, 60, 110], [0.5, 40, 170, 200], [0.75, 210, 240, 230], [1, 255, 255, 255]]),
@@ -36,36 +22,88 @@ function huePalette(h: number): Uint32Array {
 }
 
 /**
+ * Where the chemistry runs. The worker keeps the main thread free to draw
+ * (and lets the chemistry use a second core); the inline backend is the
+ * fallback where workers can't start.
+ */
+interface Backend {
+  reset(w: number, h: number, pattern: string): void;
+  /** Start a step; `shade` is handed over and comes back through `onShade`. */
+  step(q: StepRequest): void;
+  /** Whether a step is still running, so the next one waits. */
+  busy: boolean;
+  onShade: (shade: Uint8ClampedArray<ArrayBuffer>, steps: number) => void;
+  close(): void;
+}
+
+class InlineBackend implements Backend {
+  private sim: GrayScott | null = null;
+  busy = false;
+  onShade: Backend["onShade"] = () => {};
+  reset(w: number, h: number, pattern: string): void {
+    this.sim = new GrayScott(w, h, pattern);
+  }
+  step(q: StepRequest): void {
+    if (!this.sim) return;
+    this.sim.run(q);
+    this.onShade(q.shade, this.sim.steps);
+  }
+  close(): void {}
+}
+
+class WorkerBackend implements Backend {
+  private worker: Worker;
+  busy = false;
+  onShade: Backend["onShade"] = () => {};
+  constructor(onFail: () => void) {
+    this.worker = new Worker(new URL("./lib/grayscott.worker.ts", import.meta.url), { type: "module" });
+    this.worker.onmessage = (e: MessageEvent<WorkerOut>) => {
+      this.busy = false;
+      this.onShade(e.data.shade, e.data.steps);
+    };
+    this.worker.onerror = () => {
+      this.busy = false;
+      onFail();
+    };
+  }
+  reset(w: number, h: number, pattern: string): void {
+    this.busy = false;
+    const msg: WorkerIn = { type: "reset", w, h, pattern };
+    this.worker.postMessage(msg);
+  }
+  step(q: StepRequest): void {
+    this.busy = true;
+    const msg: WorkerIn = { type: "step", ...q };
+    this.worker.postMessage(msg, [q.shade.buffer]);
+  }
+  close(): void {
+    this.worker.terminate();
+  }
+}
+
+/**
  * Living ink: Gray–Scott reaction–diffusion, where two diffusing chemicals
  * grow coral, spots, mazes and dividing cells. Here the music tends the
  * garden: loud frequencies feed growth in their column of the screen (bass
  * on the left), notes seed blooms in their colour, kicks seed rings and
  * flash the ink, snares wipe holes, and the whole palette follows the melody.
+ *
+ * The chemistry itself runs in a Web Worker (see lib/grayscott.ts): each
+ * step hands the worker the frame's seeds, strokes and parameters, and the
+ * shaded grid comes back when it's done, so a big screen never has to trade
+ * growth speed for frame rate on the main thread.
  */
 class ReactionSim implements SimulationModel {
   private w = 0;
   private h = 0;
   private cell = 3;
-  private a = new Float32Array(0);
-  private b = new Float32Array(0);
-  private na = new Float32Array(0);
-  private nb = new Float32Array(0);
-  private feed = new Float32Array(0);
-  private kill = new Float32Array(0);
   private raster: Raster | null = null;
   private brush: { x: number; y: number; erase: boolean } | null = null;
   /** Where the last brush stamp landed, in cells, so fast strokes are joined up. */
   private lastStamp: { x: number; y: number } | null = null;
-  /**
-   * How strongly each cell is still fed by a brush stroke, 0..1. Fed cells
-   * have a lower kill rate, so lines drawn to join shapes stay joined instead
-   * of pinching off; the feeding fades over the Brush hold time.
-   */
-  private hold = new Float32Array(0);
-  private holdLeft = 0;
-  /** Base kill rate minus brush feeding, rebuilt each step. */
-  private killNow = new Float32Array(0);
-  private shade = new Float32Array(0);
+  /** The latest shaded grid from the chemistry, 0..255 per cell, and a spare buffer for the next step. */
+  private shade: Uint8ClampedArray<ArrayBuffer> = new Uint8ClampedArray(0);
+  private spare: Uint8ClampedArray<ArrayBuffer> = new Uint8ClampedArray(0);
   /** `shade` stretched along its rows, the first half of the upscale in `render`. */
   private wide = new Float32Array(0);
   private steps = 0;
@@ -77,68 +115,74 @@ class ReactionSim implements SimulationModel {
   private fb = new Feedback();
   private stepped = false;
   private time = 0;
-  /** Milliseconds spent iterating since the last frame was drawn. */
-  private spent = 0;
   private bloomLayer: HTMLCanvasElement | null = null;
+  /** Iterations owed: Growth speed is per 60th of a second, and steps can be shorter or longer. */
+  private iterDebt = 0;
+  /** Seconds and seeds gathered while the chemistry is busy, sent with the next step. */
+  private pendingDt = 0;
+  private pendingPaints: Paint[] = [];
+  private backend: Backend;
+  private brushCells = 3;
+
+  constructor() {
+    this.backend = this.makeBackend();
+  }
+
+  private makeBackend(): Backend {
+    let backend: Backend;
+    try {
+      if (typeof Worker === "undefined") throw new Error("no workers");
+      backend = new WorkerBackend(() => {
+        // The worker failed to start (or crashed): carry on inline, starting the pattern over.
+        this.backend.close();
+        this.backend = new InlineBackend();
+        this.backend.onShade = (shade, steps) => this.receive(shade, steps);
+        this.backend.reset(this.w, this.h, this.pattern);
+        this.seed();
+      });
+    } catch {
+      backend = new InlineBackend();
+    }
+    backend.onShade = (shade, steps) => this.receive(shade, steps);
+    return backend;
+  }
+
+  private pattern = "coral";
 
   reset(view: Viewport, p: ParamValues): void {
     this.cell = p.cellSize as number;
     this.w = Math.max(8, Math.ceil(view.width / this.cell));
     this.h = Math.max(8, Math.ceil(view.height / this.cell));
     const n = this.w * this.h;
-    this.a = new Float32Array(n).fill(1);
-    this.b = new Float32Array(n);
-    this.na = new Float32Array(n);
-    this.nb = new Float32Array(n);
-    this.feed = new Float32Array(n);
-    this.kill = new Float32Array(n);
-    this.killNow = new Float32Array(n);
-    this.hold = new Float32Array(n);
-    this.holdLeft = 0;
-    this.shade = new Float32Array(n);
+    this.pattern = p.pattern as string;
+    this.shade = new Uint8ClampedArray(n);
+    this.spare = new Uint8ClampedArray(n);
     this.raster = null;
     this.steps = 0;
-    this.applyPattern(p.pattern as string);
-    // Seed a scattering of chemical-B blobs to get things started.
-    const seeds = p.pattern === "map" ? 60 : 14;
-    for (let s = 0; s < seeds; s++) {
-      this.paint(Math.random() * this.w, Math.random() * this.h, 3 + Math.random() * 5, false);
-    }
+    this.iterDebt = 0;
+    this.pendingDt = 0;
+    this.pendingPaints = [];
+    this.backend.reset(this.w, this.h, this.pattern);
+    this.seed();
   }
 
-  private applyPattern(pattern: string): void {
-    const { w, h } = this;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        if (pattern === "map") {
-          // Kill rate varies left to right, feed rate bottom to top: a live map of every regime.
-          this.kill[i] = 0.045 + (x / w) * 0.025;
-          this.feed[i] = 0.01 + (1 - y / h) * 0.09;
-        } else {
-          const [f, k] = PRESETS[pattern] ?? PRESETS.coral;
-          this.feed[i] = f;
-          this.kill[i] = k;
-        }
-      }
-    }
+  /** Seed a scattering of chemical-B blobs to get things started. */
+  private seed(): void {
+    const seeds = this.pattern === "map" ? 60 : 14;
+    for (let s = 0; s < seeds; s++) this.paint(Math.random() * this.w, Math.random() * this.h, 3 + Math.random() * 5, false);
   }
 
-  /** Seed (or wipe) a disc of cells. `feed` also marks it as held by the brush. */
-  private paint(cx: number, cy: number, r: number, erase: boolean, feed = false): void {
-    const { w, h } = this;
-    for (let y = Math.floor(cy - r); y <= cy + r; y++) {
-      for (let x = Math.floor(cx - r); x <= cx + r; x++) {
-        if ((x - cx) ** 2 + (y - cy) ** 2 > r * r) continue;
-        const i = ((y + h) % h) * w + ((x + w) % w);
-        if (erase) { this.a[i] = 1; this.b[i] = 0; this.hold[i] = 0; }
-        else {
-          this.a[i] = 0.5; this.b[i] = 0.25 + Math.random() * 0.05;
-          if (feed) this.hold[i] = 1;
-        }
-      }
-    }
-    if (feed && !erase) this.holdLeft = 1;
+  private receive(shade: Uint8ClampedArray<ArrayBuffer>, steps: number): void {
+    // A result from before a reset (the grid changed size) is dropped.
+    if (shade.length !== this.w * this.h) return;
+    this.spare = this.shade;
+    this.shade = shade;
+    this.steps = steps;
+  }
+
+  /** Seed (or wipe) a disc of cells with the next step. `feed` also marks it as held by the brush. */
+  private paint(x: number, y: number, r: number, erase: boolean, feed = false): void {
+    this.pendingPaints.push({ x, y, r, erase, feed });
   }
 
   /** Paint along the stroke from the last stamp, so a fast drag leaves an unbroken line. */
@@ -153,117 +197,53 @@ class ReactionSim implements SimulationModel {
   }
 
   step(dt: number, p: ParamValues, m: MusicFrame): void {
+    this.flash = Math.max(this.flash * Math.exp(-dt * 5), m.kick * 0.5);
+    this.hue = hueToward(this.hue, m.hue, dt * 1.5);
+    if (this.brush) this.stroke(this.brush.x / this.cell, this.brush.y / this.cell, (p.brush as number) / this.cell, this.brush.erase);
+    else this.lastStamp = null;
+    this.stepped = true;
+    this.time += dt;
+    this.pendingDt += dt;
+    this.brushCells = (p.brush as number) / this.cell;
+    // Growth speed means iterations per nominal step; a step of another length owes proportionally.
+    // The debt is capped, so a chemistry that can't keep up grows slower rather than ever further behind.
+    this.iterDebt = Math.min((p.speed as number) * 2, this.iterDebt + (p.speed as number) * (dt / NOMINAL_DT));
+    if (this.backend.busy || this.spare.length !== this.w * this.h) return;
+
     // Loud frequencies lower the kill rate in their column, so the pattern blooms where the music is.
     if (this.colShift.length !== this.w) this.colShift = new Float32Array(this.w);
     const grow = (p.spectrumGrowth as number) * 0.0025;
     const spec = m.spectrum;
     for (let x = 0; x < this.w; x++) this.colShift[x] = -spec[Math.min(spec.length - 1, Math.floor((x / this.w) * spec.length))] * grow;
-    this.flash = Math.max(this.flash * Math.exp(-dt * 5), m.kick * 0.5);
-    this.hue = hueToward(this.hue, m.hue, dt * 1.5);
-    if (this.brush) this.stroke(this.brush.x / this.cell, this.brush.y / this.cell, (p.brush as number) / this.cell, this.brush.erase);
-    else this.lastStamp = null;
-    this.updateHold(dt, p.brushHold as number);
-    this.stepped = true;
-    this.time += dt;
-    const flow = ((p.fieldGravity as number) * dt) / this.cell;
-    if (p.gravityMode !== "off" && flow > 0) this.advect(p.gravityMode as string, flow);
-    this.brushCells = (p.brush as number) / this.cell;
-    const iters = p.speed as number;
-    const { w, h, feed } = this;
-    const kill = this.holdLeft > 0 ? this.killNow : this.kill;
-    const df = (p.feedShift as number) || 0;
-    const dk = (p.killShift as number) || 0;
+    const iters = Math.floor(this.iterDebt + 1e-6);
+    this.iterDebt -= iters;
+    // Contrast stretches the a-b difference around the same midpoint as before; kicks flash it brighter.
+    const c = (p.contrast as number) || 1.6;
+    const off = 0.5 + (1.25 - 0.5) * (c / 1.6) + this.flash * 0.25;
     // Explicit Euler with this 9-point stencil is stable for diffusion up to
     // about 1.25 (less once the reaction terms are added), so cap it at 1.05.
-    const scale = Math.min(1.05, Math.max(0.05, (p.diffusion as number) || 1));
-    const dA = 1.0 * scale, dB = 0.5 * scale;
-    const colShift = this.colShift;
-    // Big screens can't afford every requested iteration each frame; growth slows
-    // down instead of the frame rate. The budget is per drawn frame (the host may
-    // step more than once between frames), and the first step of a frame always
-    // gets at least one iteration.
-    const start = performance.now();
-    const deadline = start + ITERATION_BUDGET_MS - this.spent;
-    let done = 0;
-    for (let it = 0; it < iters; it++) {
-      if ((it > 0 || this.spent > 0) && performance.now() > deadline) break;
-      const a = this.a, b = this.b, na = this.na, nb = this.nb;
-      for (let y = 0; y < h; y++) {
-        const up = ((y - 1 + h) % h) * w, mid = y * w, down = ((y + 1) % h) * w;
-        // Walk the row carrying the left and centre columns in locals, so each
-        // cell only loads its right-hand column (a big win over 18 array reads).
-        let aul = a[up + w - 1], aml = a[mid + w - 1], adl = a[down + w - 1], auc = a[up], amc = a[mid], adc = a[down];
-        let bul = b[up + w - 1], bml = b[mid + w - 1], bdl = b[down + w - 1], buc = b[up], bmc = b[mid], bdc = b[down];
-        for (let x = 0; x < w; x++) {
-          const r = x === w - 1 ? 0 : x + 1;
-          const aur = a[up + r], amr = a[mid + r], adr = a[down + r];
-          const bur = b[up + r], bmr = b[mid + r], bdr = b[down + r];
-          // 9-point Laplacian: 0.2 for edges, 0.05 for corners.
-          const lapA = 0.2 * (auc + adc + aml + amr) + 0.05 * (aul + aur + adl + adr) - amc;
-          const lapB = 0.2 * (buc + bdc + bml + bmr) + 0.05 * (bul + bur + bdl + bdr) - bmc;
-          const i = mid + x;
-          const abb = amc * bmc * bmc;
-          let f = feed[i] + df;
-          if (f < 0) f = 0;
-          let k = kill[i] + dk + colShift[x];
-          if (k < 0) k = 0;
-          na[i] = amc + dA * lapA - abb + f * (1 - amc);
-          nb[i] = bmc + dB * lapB + abb - (k + f) * bmc;
-          aul = auc; auc = aur; aml = amc; amc = amr; adl = adc; adc = adr;
-          bul = buc; buc = bur; bml = bmc; bmc = bmr; bdl = bdc; bdc = bdr;
-        }
-      }
-      this.a = na; this.na = a;
-      this.b = nb; this.nb = b;
-      done++;
-    }
-    this.steps += done;
-    this.spent += performance.now() - start;
-  }
-
-  /** Fade the brush feeding and fold it into this step's kill rates. */
-  private updateHold(dt: number, seconds: number): void {
-    if (this.holdLeft <= 0) return;
-    const { hold, kill, killNow } = this;
-    // The top of the slider keeps strokes fed for good.
-    const fade = seconds >= 120 ? 1 : seconds <= 0 ? 0 : Math.exp(-dt / (seconds / 3));
-    let any = 0;
-    for (let i = 0; i < hold.length; i++) {
-      const v = hold[i] * fade;
-      hold[i] = v < 0.01 ? 0 : v;
-      killNow[i] = kill[i] - hold[i] * HOLD_KILL;
-      any = any > v ? any : v;
-    }
-    this.holdLeft = any;
-  }
-
-  /**
-   * Carry the ink along the gravity field by `flow` cells: each cell takes
-   * its value from upstream, blended between the four nearest cells.
-   */
-  private advect(mode: string, flow: number): void {
-    const { w, h, cell } = this;
-    const a = this.a, b = this.b, na = this.na, nb = this.nb;
-    const uniform = isUniform(mode);
-    let [dx, dy] = uniform ? gravityAt(mode, flow, 0, 0, w, h, this.time) : [0, 0];
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        if (!uniform) [dx, dy] = gravityAt(mode, flow, x * cell, y * cell, w * cell, h * cell, this.time, 40);
-        let sx = x - dx, sy = y - dy;
-        sx = ((sx % w) + w) % w;
-        sy = ((sy % h) + h) % h;
-        const x0 = Math.floor(sx), y0 = Math.floor(sy);
-        const fx = sx - x0, fy = sy - y0;
-        const x1 = x0 + 1 === w ? 0 : x0 + 1, y1 = y0 + 1 === h ? 0 : y0 + 1;
-        const i00 = y0 * w + x0, i10 = y0 * w + x1, i01 = y1 * w + x0, i11 = y1 * w + x1;
-        const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
-        const i = y * w + x;
-        na[i] = a[i00] * w00 + a[i10] * w10 + a[i01] * w01 + a[i11] * w11;
-        nb[i] = b[i00] * w00 + b[i10] * w10 + b[i01] * w01 + b[i11] * w11;
-      }
-    }
-    this.a = na; this.na = a;
-    this.b = nb; this.nb = b;
+    const diffusion = Math.min(1.05, Math.max(0.05, (p.diffusion as number) || 1));
+    const shade = this.spare;
+    this.spare = new Uint8ClampedArray(0);
+    this.backend.step({
+      dt: this.pendingDt,
+      iters,
+      feedShift: (p.feedShift as number) || 0,
+      killShift: (p.killShift as number) || 0,
+      diffusion,
+      colShift: this.colShift,
+      brushHold: p.brushHold as number,
+      paints: this.pendingPaints,
+      flowMode: p.gravityMode as string,
+      flow: ((p.fieldGravity as number) * this.pendingDt) / this.cell,
+      cell: this.cell,
+      time: this.time,
+      contrast: c,
+      offset: off,
+      shade,
+    });
+    this.pendingDt = 0;
+    this.pendingPaints = [];
   }
 
   onNote(ev: NoteEvent): void {
@@ -309,10 +289,8 @@ class ReactionSim implements SimulationModel {
       this.lastStamp = null;
     }
   }
-  private brushCells = 3;
 
   render(g: CanvasRenderingContext2D, view: Viewport, p: ParamValues, m: MusicFrame): void {
-    this.spent = 0;
     if (this.shade.length === 0) return;
     applyFeedback(this.fb, g, view, p, this.stepped);
     this.stepped = false;
@@ -324,14 +302,7 @@ class ReactionSim implements SimulationModel {
       if (Math.abs(((h - this.lutHue + 540) % 360) - 180) > 2) { this.lut = huePalette(h); this.lutHue = h; }
       lut = this.lut;
     }
-    const { a, b, w, h, shade } = this;
-    // Contrast stretches the a-b difference around the same midpoint as before; kicks flash it brighter.
-    const c = (p.contrast as number) || 1.6;
-    const off = 0.5 + (1.25 - 0.5) * (c / 1.6) + this.flash * 0.25;
-    for (let i = 0; i < shade.length; i++) {
-      const v = (a[i] - b[i]) * -c + off;
-      shade[i] = v < 0 ? 0 : v > 1 ? 255 : v * 255;
-    }
+    const { w, h, shade } = this;
     // The chemicals are smoothed up to (nearly) screen resolution before they
     // are coloured, so pattern edges come out crisp. Colouring the grid and
     // letting the canvas stretch the colours is what made the ink look blurry.
@@ -341,7 +312,7 @@ class ReactionSim implements SimulationModel {
     if (!this.raster || this.raster.width !== RW || this.raster.height !== RH) this.raster = new Raster(RW, RH);
     const px = this.raster.pixels;
     if (up === 1) {
-      for (let i = 0; i < shade.length; i++) px[i] = lut[shade[i] | 0];
+      for (let i = 0; i < shade.length; i++) px[i] = lut[shade[i]];
     } else {
       // Bilinear between cell centres, wrapping round the edges like the
       // simulation does: first along each grid row, then between rows.
