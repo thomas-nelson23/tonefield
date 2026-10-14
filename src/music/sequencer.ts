@@ -1,6 +1,7 @@
 import type { NoteEvent, NoteRole } from "../models/types";
 import type { AudioEngine, DrumSound, MixSettings, SynthTrack, TrackKey } from "./audio";
 import { ENGINES, type EngineName, type Patch } from "./plaits/patch";
+import { GRIDS_STEPS, gridsLevels, gridsThreshold } from "./grids";
 
 /** Sixteenth notes per bar. */
 export const STEPS = 16;
@@ -27,6 +28,13 @@ export const SCALES: Record<string, { label: string; steps: number[] }> = {
 export const DRUM_RESETS = [
   { value: "0", label: "None" }, { value: "1", label: "1 bar" }, { value: "2", label: "2 bars" },
   { value: "4", label: "4 bars" }, { value: "8", label: "8 bars" }, { value: "16", label: "16 bars" },
+];
+/**
+ * How a drum track makes its pattern: evenly spread euclidean hits, the
+ * Grids-style drum map, or both merged.
+ */
+export const DRUM_MODES = [
+  { value: "euclid", label: "Euclidean" }, { value: "grids", label: "Grids" }, { value: "both", label: "Both" },
 ];
 /** Longest drum pattern, in sixteenths. */
 export const MAX_DRUM_LENGTH = 32;
@@ -70,11 +78,11 @@ export const ROOTS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#"
  * and where the pattern starts) and sets how hard and how often it fills.
  * Picking a style moves the drum density sliders to its starting point.
  */
-export const STYLES: Record<string, { label: string; hits: Record<DrumKey, number>; rotate: Record<DrumKey, number>; level: number; fills: number }> = {
-  broken: { label: "Broken beat", hits: { kick: 3, snare: 2, hat: 11 }, rotate: { kick: 0, snare: 4, hat: 0 }, level: 1, fills: 1 },
-  four: { label: "Four on the floor", hits: { kick: 4, snare: 2, hat: 4 }, rotate: { kick: 0, snare: 4, hat: 2 }, level: 1, fills: 0.8 },
-  half: { label: "Half-time", hits: { kick: 3, snare: 1, hat: 8 }, rotate: { kick: 0, snare: 8, hat: 0 }, level: 1, fills: 1 },
-  ambient: { label: "Ambient", hits: { kick: 2, snare: 1, hat: 5 }, rotate: { kick: 0, snare: 12, hat: 2 }, level: 0.6, fills: 0.3 },
+export const STYLES: Record<string, { label: string; hits: Record<DrumKey, number>; rotate: Record<DrumKey, number>; map: [number, number]; level: number; fills: number }> = {
+  broken: { label: "Broken beat", hits: { kick: 3, snare: 2, hat: 11 }, rotate: { kick: 0, snare: 4, hat: 0 }, map: [0.8, 0.4], level: 1, fills: 1 },
+  four: { label: "Four on the floor", hits: { kick: 4, snare: 2, hat: 4 }, rotate: { kick: 0, snare: 4, hat: 2 }, map: [0, 0.33], level: 1, fills: 0.8 },
+  half: { label: "Half-time", hits: { kick: 3, snare: 1, hat: 8 }, rotate: { kick: 0, snare: 8, hat: 0 }, map: [0.4, 0], level: 1, fills: 1 },
+  ambient: { label: "Ambient", hits: { kick: 2, snare: 1, hat: 5 }, rotate: { kick: 0, snare: 12, hat: 2 }, map: [0.1, 0], level: 0.6, fills: 0.3 },
 };
 
 /** Velocity accent per sixteenth: downbeats loudest, then beats, then off-beats. */
@@ -236,9 +244,19 @@ export interface SequencerState {
   bassOn: boolean;
   chordsOn: boolean;
   melodyOn: boolean;
-  // Drums: density picks how many euclidean hits, variation how much each bar strays,
-  // length how many steps the pattern has, rotate (Offset) where it starts, and
-  // reset every how many bars it starts over (a DRUM_RESETS value).
+  // Drums: mode picks euclidean, Grids map or both (a DRUM_MODES value), density
+  // how many euclidean hits, fill how much of the map's pattern plays, variation
+  // how much each bar strays, length how many steps the pattern has, rotate
+  // (Offset) where it starts, and reset every how many bars it starts over (a DRUM_RESETS value).
+  kickMode: string;
+  kickFill: number;
+  snareMode: string;
+  snareFill: number;
+  hatMode: string;
+  hatFill: number;
+  /** Where on the Grids drum map the drums are, 0..1 each way. */
+  gridsX: number;
+  gridsY: number;
   kickDensity: number;
   kickVariation: number;
   kickRotate: number;
@@ -369,6 +387,8 @@ export function defaultState(): SequencerState {
     tempo: 112, swing: 0, scale: "minorPent", root: 9, sound: true, style: "broken", hold: false, seed: 1,
     drumsHold: false, bassHold: false, chordsHold: false, melodyHold: false,
     drumsOn: true, bassOn: true, chordsOn: true, melodyOn: true,
+    kickMode: "euclid", snareMode: "euclid", hatMode: "euclid", kickFill: 0.5, snareFill: 0.5, hatFill: 0.5,
+    gridsX: 0, gridsY: 0,
     kickDensity: 0, kickVariation: 0.3, kickRotate: 0, kickLength: STEPS, kickReset: "0",
     snareDensity: 0, snareVariation: 0.25, snareRotate: 0, snareLength: STEPS, snareReset: "0",
     hatDensity: 0, hatVariation: 0.4, hatRotate: 0, hatLength: STEPS, hatReset: "0",
@@ -401,6 +421,7 @@ export function applyStyleDensities(s: SequencerState): void {
     rec[`${d.key}Rotate`] = st.rotate[d.key];
     rec[`${d.key}Length`] = STEPS;
   }
+  [s.gridsX, s.gridsY] = st.map;
 }
 
 /** Keep only fields that match the current state's types (older saves had other controls). */
@@ -418,6 +439,8 @@ export function sanitizeState(saved: unknown): SequencerState {
     const len = (num[`${d.key}Length`] = Math.max(1, Math.min(MAX_DRUM_LENGTH, Math.round(num[`${d.key}Length`]))));
     num[`${d.key}Rotate`] = mod(Math.round(num[`${d.key}Rotate`]), len);
     if (!DRUM_RESETS.some((r) => r.value === str[`${d.key}Reset`])) str[`${d.key}Reset`] = "0";
+    if (!DRUM_MODES.some((m) => m.value === str[`${d.key}Mode`])) str[`${d.key}Mode`] = "euclid";
+    num[`${d.key}Fill`] = Math.max(0, Math.min(1, num[`${d.key}Fill`]));
   }
   if (!(s.scale in SCALES)) s.scale = "minorPent";
   if (!(s.bassStyle in BASS_STYLES)) s.bassStyle = "pulse";
@@ -433,6 +456,8 @@ export function sanitizeState(saved: unknown): SequencerState {
   s.echoTime = clampInt(s.echoTime, 0, ECHO_TIMES.length - 1);
   for (const d of DRUMS) num[`${d.key}Pitch`] = clampInt(num[`${d.key}Pitch`], -12, 12);
   s.chordWobbleRate = Math.max(0, Math.min(WOBBLE_RATES.length - 1, Math.round(s.chordWobbleRate)));
+  s.gridsX = Math.max(0, Math.min(1, s.gridsX));
+  s.gridsY = Math.max(0, Math.min(1, s.gridsY));
   s.root = ((Math.round(s.root) % 12) + 12) % 12;
   s.bassRange = Math.max(1, Math.min(7, Math.round(s.bassRange)));
   s.melodyRange = Math.max(2, Math.min(16, Math.round(s.melodyRange)));
@@ -529,8 +554,20 @@ export function chordName(c: Chord, key: number): string {
 export interface DrumStep {
   on: boolean;
   velocity: number;
-  /** "base" is the euclidean pattern; "ghost" an extra from Variation; "fill" from a fill. */
+  /** "base" is the pattern itself; "ghost" an extra from Variation; "fill" from a fill. */
   kind: "base" | "ghost" | "fill" | "off";
+}
+
+/** One bar's variations for a drum track. */
+interface DrumVariation {
+  /** Plays every hit a little early or late, as a share of a sixteenth. */
+  nudge: number;
+  /** Extra quiet hits in the gaps, by step, with their velocity. */
+  ghost: Map<number, number>;
+  /** Hits left out this bar. */
+  drop: Set<number>;
+  /** On the map: how far each step's weight is pushed this bar, or null for none. */
+  chaos: Float32Array | null;
 }
 
 /** One melody note in the bar view. */
@@ -544,8 +581,9 @@ export interface MelodyNote {
 
 /**
  * A generative sequencer in four parts. Drums are euclidean rings whose
- * density sets the number of hits and whose variation adds ghost notes, drops
- * and nudges each bar. Chords walk through a progression typical of their
+ * density sets the number of hits, or patterns read off a Grids-style drum map
+ * (see grids.ts), or both merged; variation adds ghost notes, drops and nudges
+ * each bar, and on the map also jiggles each step's weight like Grids' chaos. Chords walk through a progression typical of their
  * style, and Variation swaps progressions and substitutes chords. The bass
  * follows the chord root, and the melody follows the scale and leans on chord
  * tones. Each part keeps a fixed random "gate" per step and plays every step
@@ -589,8 +627,11 @@ export class Sequencer {
   /** Epic's key change, in semitones, for this pass of the progression. */
   lift = 0;
   private rng: () => number;
-  /** This bar's variations per drum: `nudge` plays every hit a little early or late, as a share of a sixteenth. */
-  private drumVar: { nudge: number; ghost: Map<number, number>; drop: Set<number> }[] = [];
+  /** This bar's variations per drum. */
+  private drumVar: DrumVariation[] = [];
+  /** Each drum's base pattern and step levels, kept until a control they depend on changes. */
+  private drumCache: { key: string; base: boolean[]; euclid: boolean[]; levels: Float32Array }[] =
+    DRUMS.map(() => ({ key: "", base: [], euclid: [], levels: new Float32Array(GRIDS_STEPS) }));
   private bassGate: number[] = [];
   private bassPick: number[] = [];
   private chordGate: number[] = [];
@@ -663,7 +704,7 @@ export class Sequencer {
 
   private generate(): void {
     const r = this.rng;
-    this.drumVar = DRUMS.map(() => ({ nudge: 0, ghost: new Map(), drop: new Set() }));
+    this.drumVar = DRUMS.map(() => ({ nudge: 0, ghost: new Map(), drop: new Set(), chaos: null }));
     this.bassGate = Array.from({ length: STEPS }, r);
     this.bassPick = Array.from({ length: STEPS }, r);
     this.chordGate = Array.from({ length: STEPS }, r);
@@ -826,11 +867,17 @@ export class Sequencer {
     if (!this.held("drums")) {
       DRUMS.forEach((d, i) => {
         const v = this.num(`${d.key}Variation`);
-        const dv = { nudge: 0, ghost: new Map<number, number>(), drop: new Set<number>() };
+        const dv: DrumVariation = { nudge: 0, ghost: new Map<number, number>(), drop: new Set<number>(), chaos: null };
         const len = this.length(d.key);
         const start = this.rotation(d.key);
-        const base = euclid(this.pulses(d.key), len, start);
-        if (r() < v * 0.9) {
+        const base = this.basePattern(i);
+        const mode = this.mode(d.key);
+        if (mode !== "euclid" && v > 0) {
+          // Like Grids' chaos: every step's weight is pushed up or down a little each bar,
+          // so weak steps come and go and, with a lot of Variation, strong ones can drop out.
+          dv.chaos = Float32Array.from({ length: len }, () => (r() - 0.5) * v * 0.7);
+        }
+        if (mode !== "grids" && r() < v * 0.9) {
           // Ghost notes in the gaps; hats get more of them.
           const n = 1 + Math.floor(r() * (1 + v * (d.key === "hat" ? 4 : 2)));
           for (let k = 0; k < n; k++) {
@@ -959,10 +1006,49 @@ export class Sequencer {
     return since % this.length(key);
   }
 
-  /** The bare euclidean pattern of a track, without this bar's variations. */
-  basePattern(i: number): boolean[] {
+  /** How a drum track makes its pattern: "euclid", "grids" or "both". */
+  mode(key: DrumKey): string {
+    return (this.state as unknown as Record<string, string>)[`${key}Mode`];
+  }
+
+  /**
+   * Which map step a track reads at step `pos` of its pattern. The map's grooves are
+   * written against the bar, so Offset (which places the euclidean hits) leaves them be;
+   * Steps under 32 plays the first part of the map's two-bar pattern.
+   */
+  private mapStep(pos: number): number {
+    return pos % GRIDS_STEPS;
+  }
+
+  /** Builds (or reuses) a track's bare pattern and its map levels. */
+  private drumPattern(i: number): { base: boolean[]; euclid: boolean[]; levels: Float32Array } {
     const d = DRUMS[i];
-    return euclid(this.pulses(d.key), this.length(d.key), this.rotation(d.key));
+    const s = this.state;
+    const mode = this.mode(d.key);
+    const len = this.length(d.key), rot = this.rotation(d.key), pulses = this.pulses(d.key);
+    const fill = this.num(`${d.key}Fill`);
+    const cache = this.drumCache[i];
+    const key = `${mode}|${len}|${rot}|${pulses}|${fill}|${s.gridsX}|${s.gridsY}`;
+    if (cache.key === key) return cache;
+    cache.key = key;
+    cache.euclid = mode === "grids" ? new Array<boolean>(len).fill(false) : euclid(pulses, len, rot);
+    cache.base = cache.euclid.slice();
+    if (mode !== "euclid") {
+      gridsLevels(i, s.gridsX, s.gridsY, cache.levels);
+      const threshold = gridsThreshold(fill);
+      for (let k = 0; k < len; k++) if (cache.levels[this.mapStep(k)] > threshold) cache.base[k] = true;
+    }
+    return cache;
+  }
+
+  /** The bare pattern of a track (euclidean, map or both), without this bar's variations. */
+  basePattern(i: number): boolean[] {
+    return this.drumPattern(i).base;
+  }
+
+  /** Whether a track's pattern has any hits at all, so fills and ghosts stay off an empty one. */
+  private hasHits(i: number): boolean {
+    return this.drumPattern(i).base.includes(true);
   }
 
   /**
@@ -974,17 +1060,32 @@ export class Sequencer {
     const d = DRUMS[i];
     const style = STYLES[this.state.style] ?? STYLES.broken;
     const dv = this.drumVar[i];
-    const base = this.basePattern(i);
+    const { base, euclid: euclidHits, levels } = this.drumPattern(i);
+    const mode = this.mode(d.key);
     const level = style.level;
-    if (fill && step >= 12 && d.key !== "kick" && this.pulses(d.key) > 0) {
+    if (fill && step >= 12 && d.key !== "kick" && this.hasHits(i)) {
       // Rolls build through the last beat.
       const w = FILL_WEIGHT[step - 12] * (d.key === "snare" ? 1 : 0.8);
       if (base[pos] || w > 0.6) return { on: true, velocity: Math.min(1, (0.55 + 0.1 * (step - 12) + 0.2 * w) * level), kind: base[pos] ? "base" : "fill" };
     }
     const accent = ACCENT[step >= 0 ? step : pos % STEPS];
-    if (base[pos] && !dv.drop.has(pos)) return { on: true, velocity: (0.45 + 0.5 * accent) * level, kind: "base" };
+    let velocity = (0.45 + 0.5 * accent) * level;
+    let on = base[pos];
+    let kind: DrumStep["kind"] = "base";
+    if (mode !== "euclid") {
+      // On the map, a step's weight is its loudness, and Variation's chaos can push it over or under the line.
+      const w = levels[this.mapStep(pos)];
+      const fillAmount = this.num(`${d.key}Fill`);
+      const jiggled = w + (dv.chaos?.[pos] ?? 0);
+      const mapOn = fillAmount > 0 && w > 0.05 && jiggled > gridsThreshold(fillAmount);
+      const euclidOn = euclidHits[pos];
+      if (mapOn) velocity = Math.max(euclidOn ? velocity : 0, (0.35 + 0.65 * Math.min(1, w)) * level);
+      if (mapOn && !on) kind = "ghost";
+      on = euclidOn || mapOn;
+    }
+    if (on && !dv.drop.has(pos)) return { on: true, velocity, kind };
     const ghost = dv.ghost.get(pos);
-    if (ghost !== undefined && this.pulses(d.key) > 0) return { on: true, velocity: ghost * level, kind: "ghost" };
+    if (ghost !== undefined && this.hasHits(i)) return { on: true, velocity: ghost * level, kind: "ghost" };
     return { on: false, velocity: 0, kind: "off" };
   }
 
