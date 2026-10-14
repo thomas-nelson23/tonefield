@@ -34,11 +34,21 @@ function saveCollapsed(set: Set<string>): void {
   }
 }
 
+/** Parameters Randomize leaves alone: the keys, and a callback after one is locked or unlocked. */
+export interface ParamLocks {
+  keys: Set<string>;
+  changed(): void;
+}
+
+const LOCK_ICON =
+  '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.5" width="8" height="5.5" rx="1"/><path class="shackle" d="M4 5.5V4a2 2 0 0 1 4 0v1.5"/></svg>';
+
 /**
  * Builds sliders, checkboxes and dropdowns from a model's parameter specs. `onChange`
  * receives the spec that changed so the host can decide whether to reset.
  * Each row carries `data-target` (`targetPrefix` + key) so MIDI learn can find it.
- * Specs marked `hidden` get no control.
+ * Specs marked `hidden` get no control. With `locks`, each row gets a padlock
+ * that keeps the parameter out of Randomize.
  */
 export function renderParamControls(
   container: HTMLElement,
@@ -46,6 +56,7 @@ export function renderParamControls(
   values: ParamValues,
   onChange: (spec: ParamSpec) => void,
   targetPrefix = "",
+  locks?: ParamLocks,
 ): ParamControls {
   container.replaceChildren();
   const refreshers: (() => void)[] = [];
@@ -165,6 +176,28 @@ export function renderParamControls(
       });
       refreshers.push(() => (input.checked = Boolean(values[spec.key])));
       row.append(input, label);
+    }
+
+    if (locks) {
+      row.classList.add("lockable");
+      const lock = document.createElement("button");
+      lock.type = "button";
+      lock.className = "lock";
+      lock.innerHTML = LOCK_ICON;
+      const show = () => {
+        const on = locks.keys.has(spec.key);
+        lock.classList.toggle("on", on);
+        lock.setAttribute("aria-pressed", String(on));
+        lock.title = on ? "Locked: Randomize leaves this alone. Click to unlock." : "Lock, so Randomize leaves this alone";
+      };
+      show();
+      lock.addEventListener("click", () => {
+        if (!locks.keys.delete(spec.key)) locks.keys.add(spec.key);
+        show();
+        locks.changed();
+        lock.blur();
+      });
+      row.prepend(lock);
     }
 
     const badge = document.createElement("div");

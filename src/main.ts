@@ -1,6 +1,6 @@
 import { models, findModel } from "./models/registry";
 import { defaultParams, SILENT_MUSIC, type ModelDefinition, type MusicFrame, type ParamSpec, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./models/types";
-import { renderParamControls, type ParamControls } from "./ui/controls";
+import { renderParamControls, type ParamControls, type ParamLocks } from "./ui/controls";
 import { setupPanels, setupRangeFill, setupSidebarToggle } from "./ui/panels";
 import { ColourGrade, type Grade } from "./ui/grade";
 import { Gfx } from "./gl/gfx";
@@ -61,6 +61,8 @@ let params: ParamValues;
 /** What the model sees: slider values pushed by macros and modulation. */
 let effective: ParamValues = {};
 let paramControls: ParamControls | null = null;
+/** Parameters of the current model that Randomize leaves alone, remembered per model. */
+let locks = new Set<string>();
 /** What the music is doing this frame, as the model sees it. */
 let music: MusicFrame = SILENT_MUSIC;
 let view: Viewport = { width: 1, height: 1 };
@@ -197,7 +199,9 @@ function loadModel(id: string): void {
       dirty = true;
     }
   };
-  const controls = (paramControls = renderParamControls(paramsEl, def.params, params, onChange));
+  locks = loadLocks(def);
+  const lockHooks: ParamLocks = { keys: locks, changed: () => saveLocks(def) };
+  const controls = (paramControls = renderParamControls(paramsEl, def.params, params, onChange, "", lockHooks));
   studio.setModel(def, params, controls, onChange);
   try {
     localStorage.setItem("lastModel", def.id);
@@ -206,8 +210,26 @@ function loadModel(id: string): void {
   }
 }
 
+function loadLocks(d: ModelDefinition): Set<string> {
+  try {
+    const keys = JSON.parse(localStorage.getItem(`ui:locks:${d.id}`) ?? "[]") as string[];
+    return new Set(keys.filter((k) => d.params.some((p) => p.key === k)));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveLocks(d: ModelDefinition): void {
+  try {
+    if (locks.size) localStorage.setItem(`ui:locks:${d.id}`, JSON.stringify([...locks]));
+    else localStorage.removeItem(`ui:locks:${d.id}`);
+  } catch {
+    // Only a convenience.
+  }
+}
+
 /**
- * Give every parameter of the model a random value. Setup sizes (particle and
+ * Give every unlocked parameter of the model a random value. Setup sizes (particle and
  * bird counts, grains and so on) stay between their minimum and half again
  * their default, so a roll never stalls the frame rate.
  */
@@ -215,7 +237,7 @@ function randomizeParams(): void {
   let rebuild = false;
   for (const spec of def.params) {
     // The global controls set these.
-    if (spec.hidden) continue;
+    if (spec.hidden || locks.has(spec.key)) continue;
     const before = params[spec.key];
     if (spec.kind === "number") {
       const max = spec.resetOnChange ? Math.min(spec.max, Math.max(spec.min + spec.step, (spec.default as number) * 1.5)) : spec.max;

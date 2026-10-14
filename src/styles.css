@@ -328,6 +328,31 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
 #sidebar .param > .param-help { grid-column: 1 / -1; }
 #sidebar .param:has(> select) > .param-help { margin-top: 3px; }
 
+/* A padlock before each parameter keeps it out of Randomize; it brightens on hover and stays lit while locked. */
+#sidebar .param.lockable:has(> input[type="range"]),
+#sidebar .param.lockable:has(> select) { grid-template-columns: 14px 80px minmax(0, 1fr) 44px; column-gap: 6px; }
+#sidebar .param.lockable > .lock { grid-column: 1; grid-row: 1; }
+#sidebar .param.lockable > label > span:first-child,
+#sidebar .param.lockable:has(> select) > label { grid-column: 2; }
+#sidebar .param.lockable > input[type="range"] { grid-column: 3; }
+#sidebar .param.lockable > label > .readout { grid-column: 4; }
+#sidebar .param.lockable > select { grid-column: 3 / -1; }
+#sidebar .param.lockable > .mod-track { grid-column: 3; }
+#sidebar .param.lockable > .mod-badge { grid-column: 3 / -1; }
+#sidebar .param-toggle.lockable .param-help { padding-left: 42px; }
+button.lock {
+  width: 14px; height: 14px; padding: 0; border: 0; background: none; box-shadow: none;
+  display: grid; place-items: center; color: var(--muted); opacity: 0.35; cursor: pointer;
+}
+button.lock:hover:not(:disabled) { background: none; border: 0; color: var(--strong); }
+button.lock.on:hover:not(:disabled) { color: var(--accent-hover); }
+.lock svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.3; }
+.lock .shackle { transform: translateY(-1.5px); }
+.param:hover > .lock, .lock:focus-visible { opacity: 0.85; }
+.lock.on { color: var(--accent); opacity: 1; }
+.lock.on svg rect { fill: currentColor; }
+.lock.on .shackle { transform: none; }
+
 .param label { display: flex; justify-content: space-between; gap: 4px; margin-bottom: 4px; }
 .param .readout { color: var(--muted); font-variant-numeric: tabular-nums; }
 .param-toggle { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
@@ -570,7 +595,9 @@ button.drum-name {
 
 .mod-rows { display: flex; flex-direction: column; gap: 6px; }
 .mod-rows > .muted { margin: 0; }
-.route { display: grid; grid-template-columns: auto 118px 36px auto minmax(110px, 180px) minmax(70px, 1fr) 40px auto; gap: 6px; align-items: center; }
+.route { display: grid; grid-template-columns: auto 118px 36px auto minmax(110px, 180px) minmax(70px, 1fr) 40px auto auto; gap: 6px; align-items: center; }
+.route .dice { padding: 1px 5px; line-height: 1; }
+.route .dice svg { width: 13px; height: 13px; display: block; }
 .route.off > :not(input[type="checkbox"]):not(button) { opacity: 0.4; }
 .route select { padding: 2px 5px; }
 /* A built-in reaction's sound and effect are fixed, so they're shown as plain cells rather than dropdowns. */
