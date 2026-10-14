@@ -50,7 +50,7 @@ export function renderParamControls(
   container.replaceChildren();
   const refreshers: (() => void)[] = [];
   const badges: Record<string, HTMLElement> = {};
-  const sliders: { spec: Extract<ParamSpec, { kind: "number" }>; marker: HTMLElement; readout: HTMLElement; shown: boolean }[] = [];
+  const sliders: { spec: Extract<ParamSpec, { kind: "number" }>; marker: HTMLElement; readout: HTMLElement; shown: boolean; drawn: string }[] = [];
   // Parameters with a group go under a foldable heading, in the order groups first appear.
   const groups = new Map<string, HTMLElement>();
   const collapsed = loadCollapsed();
@@ -123,7 +123,7 @@ export function renderParamControls(
       const marker = document.createElement("div");
       marker.className = "mod-marker";
       track.append(marker);
-      sliders.push({ spec, marker, readout, shown: false });
+      sliders.push({ spec, marker, readout, shown: false, drawn: "" });
       refreshers.push(() => {
         input.value = String(values[spec.key]);
         show();
@@ -196,10 +196,15 @@ export function renderParamControls(
         const on = Math.abs(v - base) > 1e-9;
         if (on) {
           // A bar from the slider's own value to where modulation has pushed it.
+          // It only moves when it moves a visible amount: each move makes the
+          // webview repaint the sidebar, which is slow while music plays.
           const range = s.spec.max - s.spec.min;
           const a = (Math.min(v, base) - s.spec.min) / range, b = (Math.max(v, base) - s.spec.min) / range;
-          s.marker.style.left = `${a * 100}%`;
-          s.marker.style.width = `${(b - a) * 100}%`;
+          const drawn = `translateX(${(a * 100).toFixed(1)}%) scaleX(${Math.max(0.015, b - a).toFixed(3)})`;
+          if (drawn !== s.drawn) {
+            s.drawn = drawn;
+            s.marker.style.transform = drawn;
+          }
         }
         if (on !== s.shown) {
           s.marker.parentElement!.classList.toggle("active", on);

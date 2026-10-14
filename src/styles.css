@@ -42,7 +42,7 @@
   --radius-sm: 5px;       /* buttons and fields */
   --radius-pill: 999px;
   --sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(0, 0, 0, 0.12));
-  --bevel: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.35);
+  --bevel: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 0 rgba(0, 0, 0, 0.35);
   --glow: 0 0 8px;        /* followed by a colour, for LEDs */
   --ease: 0.12s ease-out;
 
@@ -95,7 +95,7 @@ select, input[type="number"], input[type="text"] {
   background: var(--field);
   border: 1px solid var(--edge);
   padding: 3px 6px;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.4);
   transition: border-color var(--ease);
 }
 select { width: 100%; cursor: pointer; }
@@ -143,7 +143,7 @@ input[type="range"]:focus { outline: none; }
 input[type="range"]::-webkit-slider-runnable-track {
   height: 5px; border-radius: var(--radius-pill);
   background: linear-gradient(90deg, var(--fill-colour) var(--fill, 0%), var(--track) var(--fill, 0%));
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6), 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.6), 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -151,7 +151,7 @@ input[type="range"]::-webkit-slider-thumb {
   border-radius: 50%;
   background: radial-gradient(circle at 50% 35%, #ffffff, #c9d1da 70%);
   border: 2px solid var(--thumb);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.5);
   transition: transform var(--ease);
 }
 input[type="range"]:hover::-webkit-slider-thumb, input[type="range"]:focus-visible::-webkit-slider-thumb { transform: scale(1.2); }
@@ -252,7 +252,7 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
 .panel {
   background: var(--panel); flex-shrink: 0;
   border-radius: var(--radius); overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
 }
 .panel-head {
   display: flex; align-items: center; gap: 6px;
@@ -338,7 +338,8 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
 .param .readout.modulated { color: var(--accent); }
 .mod-track { position: relative; height: 2px; margin-top: 1px; visibility: hidden; }
 .mod-track.active { visibility: visible; }
-.mod-marker { position: absolute; top: 0; height: 2px; min-width: 3px; border-radius: 1px; background: var(--accent); }
+/* The modulation bar moves by transform, so moving it needs no layout. */
+.mod-marker { position: absolute; top: 0; left: 0; width: 100%; height: 2px; transform-origin: 0 0; transform: scaleX(0); background: var(--accent); }
 
 body.learning #sidebar .param[data-target],
 body.learning #dock .param[data-target] { outline: 1px dashed var(--edge); outline-offset: 2px; cursor: pointer; }
@@ -389,7 +390,7 @@ body.learning #dock .param.learn-target { outline: 1px solid var(--macro); }
   flex-shrink: 0; display: flex; flex-direction: column; gap: 6px;
   padding: 8px 10px; background: var(--bar);
   border-radius: var(--radius); border-top: 3px solid var(--part);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
 }
 .seq-part input[type="range"] { --thumb: var(--part); }
 .part-drums { --part: var(--c-drums); }
@@ -513,7 +514,7 @@ button.strip-btn.solo.active { background: var(--solo-bg); border-color: var(--s
 }
 .chip.current { background: rgba(196, 145, 255, 0.22); border-color: var(--macro); color: var(--strong); transform: scale(1.08); }
 .chip.lift { border-style: dashed; color: var(--macro); }
-#melody-view { width: 100%; height: 58px; border-radius: var(--radius-sm); background: var(--field); flex-shrink: 0; margin-bottom: 4px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5); }
+#melody-view { width: 100%; height: 58px; border-radius: var(--radius-sm); background: var(--field); flex-shrink: 0; margin-bottom: 4px; box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.5); }
 
 .mod-layout { display: grid; grid-template-columns: 220px 1fr; gap: 24px; }
 /* Built-in rows and routes side by side, stacking when the window is too narrow for both. */
@@ -553,5 +554,5 @@ button.strip-btn.solo.active { background: var(--solo-bg); border-color: var(--s
 
 #meters { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
 .meter { display: grid; grid-template-columns: 90px 1fr; align-items: center; color: var(--muted); }
-.meter-track { height: 7px; border-radius: var(--radius-pill); background: var(--field); overflow: hidden; box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5); }
-.meter-fill { height: 100%; width: 0; border-radius: var(--radius-pill); background: linear-gradient(90deg, var(--ok), var(--accent) 70%, var(--danger)); }
+.meter-track { height: 7px; border-radius: var(--radius-pill); background: var(--field); overflow: hidden; box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.5); }
+.meter-fill { height: 100%; transform-origin: 0 0; transform: scaleX(0); background: linear-gradient(90deg, var(--ok), var(--accent) 70%, var(--danger)); }

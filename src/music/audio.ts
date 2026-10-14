@@ -107,7 +107,8 @@ export class AudioEngine {
   private applied = new Map<string, number>();
   private reverbBuiltAt = -1;
   private reverbSize = -1;
-  private meterData = new Float32Array(256);
+  /** Long enough to cover the time between meter redraws, so short peaks aren't missed. */
+  private meterData = new Float32Array(2048);
   private masterPeak = 0;
   private lastHz: Partial<Record<TrackKey, number>> = {};
   private driveCurves = new Map<number, Float32Array<ArrayBuffer>>();
