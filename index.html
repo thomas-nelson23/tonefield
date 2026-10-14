@@ -157,13 +157,22 @@
                   <label class="mod-global" title="How long a hit keeps pushing after it lands.">Note decay <input id="mod-decay" type="range" min="0.05" max="1.5" step="0.05" /> <span id="mod-decay-readout" class="readout"></span></label>
                 </div>
                 <div class="mod-main">
-                  <div class="section-label">Modulation in this model</div>
-                  <p class="muted tab-help">Rows marked Built-in are what this model does with the music by itself; hover one to read what it does, and its slider sets how strongly. The rest are routes, which let a sound push a slider by a share of its range. The bar shows the sound right now, and ♪ under a sidebar slider names what is pushing it.</p>
-                  <div id="mod-routes"></div>
-                  <div class="row-buttons">
-                    <button type="button" id="mod-add">Add route</button>
-                    <button type="button" id="mod-restore" hidden>Restore built-ins</button>
-                    <button type="button" id="mod-defaults">Reset to model defaults</button>
+                  <div class="mod-col">
+                    <div class="section-label" id="mod-builtins-title">Built into this model</div>
+                    <p class="muted tab-help">What the model does with the music by itself. Hover a row to read what it does; the slider sets how strongly.</p>
+                    <div id="mod-builtins" class="mod-rows"></div>
+                    <div class="row-buttons">
+                      <button type="button" id="mod-restore" hidden>Restore built-ins</button>
+                    </div>
+                  </div>
+                  <div class="mod-col">
+                    <div class="section-label">Your routes</div>
+                    <p class="muted tab-help">Each route lets a sound push a slider by a share of its range. The bar shows the sound right now, and ♪ under a sidebar slider names what is pushing it.</p>
+                    <div id="mod-routes" class="mod-rows"></div>
+                    <div class="row-buttons">
+                      <button type="button" id="mod-add">Add route</button>
+                      <button type="button" id="mod-defaults">Reset to model defaults</button>
+                    </div>
                   </div>
                 </div>
               </div>

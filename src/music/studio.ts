@@ -1431,14 +1431,14 @@ export class Studio {
     }
   }
 
-  /** Draw the modulation matrix: the model's built-in reactions, then the routes. */
+  /** Draw the modulation matrix: the model's built-in reactions beside the routes. */
   private renderRoutes(): void {
     this.sourceMeters = [];
+    this.renderReactions();
     const box = $("mod-routes");
     box.replaceChildren();
-    this.renderReactions(box);
     const targets = this.targets();
-    if (this.modelSettings.routes.length === 0 && this.modelSettings.reactions.length === 0) {
+    if (this.modelSettings.routes.length === 0) {
       box.append(el("p", { className: "muted", textContent: "No routes. Add one to let a sound or controller push a slider." }));
     }
     this.modelSettings.routes.forEach((route, i) => {
@@ -1506,8 +1506,14 @@ export class Studio {
    * The model's built-in reactions, as matrix rows: the sound it listens to,
    * what it does, and how strongly, each one switchable and deletable.
    */
-  private renderReactions(box: HTMLElement): void {
+  private renderReactions(): void {
+    const box = $("mod-builtins");
+    box.replaceChildren();
+    $("mod-builtins-title").textContent = this.def ? `Built into ${this.def.name}` : "Built into this model";
     const all = this.def?.reactions ?? [];
+    if (all.length === 0) {
+      box.append(el("p", { className: "muted", textContent: "This model doesn't react to music by itself; routes are how music reaches it." }));
+    }
     const rows = this.modelSettings.reactions;
     for (const row of rows) {
       const spec = all.find((r) => r.source === row.source);
