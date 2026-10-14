@@ -1,6 +1,7 @@
 import { jitterScale, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { noteHash, noteHue } from "./lib/music";
 import { Feedback, applyFeedback, colourParam, feedbackParams, glowSprite, schemeHue } from "./lib/visual";
+import { hsla, type Gfx } from "../gl/gfx";
 import { gravityTo, gravityModeParam, isUniform } from "./lib/gravity";
 
 /** Patterns where nodes roam freely and link up by distance; the rest are laid out in shapes. */
@@ -723,6 +724,64 @@ class PlexusSim implements SimulationModel {
     g.lineWidth = 1;
     g.globalCompositeOperation = "source-over";
   }
+
+  /** The same picture as `render`, drawn on the GPU. */
+  renderGL(gfx: Gfx, _view: Viewport, p: ParamValues, m: MusicFrame): void {
+    gfx.feedback(p.afterglow as number, p.zoom as number, p.spin as number, this.stepped);
+    this.stepped = false;
+    const n = this.n, x = this.x, y = this.y, vis = this.vis, hue = this.hue;
+    for (let i = 0; i < n; i++) hue[i] = ((Math.atan2(this.hy[i], this.hx[i]) * 180) / Math.PI + 360) % 360;
+
+    gfx.blend("add");
+    const width = (p.lineWidth as number) * (1 + Math.min(1.5, m.bass) * 0.6);
+    const light = 55 + this.flash * 20 + Math.min(1, m.level) * 10;
+    const bright = (p.lineBright as number) * (0.7 + Math.min(1, m.level) * 0.5 + this.flash * 0.4);
+    const lineColours = this.glLines;
+    for (let b = 0; b < HUES * SHADES; b++) {
+      lineColours[b] = hsla(((b % HUES) + 0.5) * (360 / HUES), 0.85, light / 100, Math.min(1, ((Math.floor(b / HUES) + 0.6) / SHADES) * bright));
+    }
+    for (let e = 0; e < this.edges; e++) {
+      const a = this.ea[e], b = this.eb[e], c = this.ec[e];
+      const w = this.ew[e] * Math.min(vis[a], vis[b]);
+      if (w < 0.12) continue;
+      let bx = x[b], by = y[b];
+      if (c >= 0) { const t = this.et[e]; bx += (x[c] - bx) * t; by += (y[c] - by) * t; }
+      const hxm = this.hx[a] + this.hx[b], hym = this.hy[a] + this.hy[b];
+      const h = ((Math.atan2(hym, hxm) * 180) / Math.PI + 360) % 360;
+      const bucket = (Math.min(SHADES - 1, Math.floor(w * SHADES))) * HUES + (Math.floor(h / (360 / HUES)) % HUES);
+      gfx.line(x[a], y[a], bx, by, width, lineColours[bucket]);
+    }
+
+    const size = (p.nodeSize as number) * (this.pattern === "stars" ? 1.5 : 1) * (1 + m.pulse * 0.35);
+    if (size > 0.05) {
+      const dotColours = this.glDots;
+      for (let b = 0; b < HUES; b++) dotColours[b] = hsla((b + 0.5) * (360 / HUES), 0.8, Math.min(1, (light + 15) / 100));
+      for (let i = 0; i < n; i++) {
+        if (vis[i] < 0.1) continue;
+        gfx.disc(x[i], y[i], size * vis[i] * (1 + this.spark[i]), dotColours[Math.floor(hue[i] / (360 / HUES)) % HUES]);
+      }
+    }
+    const glow = Math.max(1, p.nodeSize as number) * (1 + Math.min(1, m.treble) * 0.6);
+    for (let i = 0, drawn = 0; i < n && drawn < MAX_GLOWS; i++) {
+      const sp = this.spark[i] * vis[i];
+      if (sp < 0.3) continue;
+      gfx.glow(x[i], y[i], glow * 14 * sp, Math.round(hue[i] / 10) * 10, 90);
+      drawn++;
+    }
+    if (this.packets > 0) {
+      const cometWidth = (p.lineWidth as number) * 1.8 + 0.5;
+      for (let q = 0; q < this.packets; q++) {
+        const a = this.pkFrom[q], b = this.pkTo[q], t = this.pkT[q];
+        const t0 = Math.max(0, t - 0.25);
+        const bucket = Math.floor(this.pkHue[q] / (360 / HUES)) % HUES;
+        gfx.line(x[a] + (x[b] - x[a]) * t0, y[a] + (y[b] - y[a]) * t0, x[a] + (x[b] - x[a]) * t, y[a] + (y[b] - y[a]) * t, cometWidth, hsla((bucket + 0.5) * (360 / HUES), 0.95, 0.72));
+      }
+    }
+    gfx.blend("normal");
+  }
+
+  private readonly glLines = new Uint32Array(HUES * SHADES);
+  private readonly glDots = new Uint32Array(HUES);
 
   stats(): string {
     let shown = 0;
