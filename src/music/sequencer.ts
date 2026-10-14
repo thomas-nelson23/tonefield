@@ -1,5 +1,6 @@
 import type { NoteEvent, NoteRole } from "../models/types";
-import type { AudioEngine, BassTone, ChordTone, DrumSound, MelodyTone, MixSettings, TrackKey, Waveform } from "./audio";
+import type { AudioEngine, DrumSound, MixSettings, SynthTrack, TrackKey } from "./audio";
+import { ENGINES, type EngineName, type Patch } from "./plaits/patch";
 
 /** Sixteenth notes per bar. */
 export const STEPS = 16;
@@ -42,13 +43,20 @@ export const TRACKS: { key: TrackKey; label: string }[] = [
 export const ECHO_TIMES = [1, 2, 3, 4, 6];
 export const ECHO_TIME_LABELS = ["1/16", "1/8", "Dotted 1/8", "1/4", "Dotted 1/4"];
 
-/** Oscillator shapes for the bass and melody synths. */
-export const SYNTH_WAVES: { value: Waveform; label: string }[] = [
-  { value: "sawtooth", label: "Saw" },
-  { value: "square", label: "Square" },
-  { value: "triangle", label: "Triangle" },
-  { value: "sine", label: "Sine" },
+/** The Plaits engines each track can play, in Plaits' order. */
+export const ENGINE_CHOICES: { value: EngineName; label: string }[] = [
+  { value: "analog", label: "Virtual analog" },
+  { value: "fold", label: "Waveshaper" },
+  { value: "fm", label: "FM" },
+  { value: "grain", label: "Grain formant" },
+  { value: "additive", label: "Additive" },
+  { value: "strings", label: "String machine" },
+  { value: "pluck", label: "Plucked string" },
+  { value: "modal", label: "Modal resonator" },
 ];
+
+/** The state key prefix of each synth track's sound controls. */
+const SOUND_PREFIX: Record<SynthTrack, "bass" | "chord" | "melody"> = { bass: "bass", chords: "chord", melody: "melody" };
 
 /** A fader position as gain: 0.8 is unity, the top is about +4 dB. */
 export function faderGain(v: number): number {
@@ -118,7 +126,6 @@ export const CHORD_STYLES: Record<string, {
   rhythm: number[];
   /** How much of the gap to the next hit a chord holds for. */
   legato: number;
-  tone: ChordTone;
   /** Harmonic rhythm: how long chords last at each level of Rhythm density (see HarmonicRung). */
   changes: HarmonicRung[];
 }> = {
@@ -128,7 +135,6 @@ export const CHORD_STYLES: Record<string, {
     minor: ["iiø7 V7 i7 i7", "i7 iv7 bVII7 bIIImaj7", "i7 bVImaj7 iiø7 V7", "i9 iv9 i9 V7"],
     rhythm: [0.9, 0, 0, 0.2, 0, 0, 0.85, 0.1, 0, 0.3, 0.5, 0, 0, 0.2, 0.6, 0.15],
     legato: 0.6,
-    tone: { wave: "triangle", cutoff: 2600, attack: 0.006 },
     // Jazz moves: a bar per chord with ii-V turnarounds, up to two or four changes a bar.
     changes: [
       { at: 0, patterns: [TWO_BARS, MIXED_TWO] },
@@ -146,7 +152,6 @@ export const CHORD_STYLES: Record<string, {
     minor: ["i bVI bIII bVII", "i bVII bVI bVII", "i iv bVI bVII", "bVI bVII i i", "i bIII bVII iv"],
     rhythm: [1, 0, 0.3, 0, 0.5, 0, 0.6, 0, 0.8, 0, 0.3, 0.2, 0.5, 0, 0.6, 0.1],
     legato: 0.95,
-    tone: { wave: "sawtooth", cutoff: 1500, attack: 0.02 },
     // Pop: two bars per chord with a pickup into the next phrase, then a bar each, then faster.
     changes: [
       { at: 0, patterns: [TWO_BARS, MIXED_TWO] },
@@ -162,7 +167,6 @@ export const CHORD_STYLES: Record<string, {
     minor: ["i bVI bIII bVII", "i bVII bVI bVII", "i i bVI bVII", "i7 bVImaj7 bIII bVII", "iadd9 bVImaj7 bVII iv7"],
     rhythm: [0.15, 0, 1, 0, 0.15, 0, 1, 0, 0.15, 0, 1, 0, 0.15, 0.1, 1, 0.2],
     legato: 0.45,
-    tone: { wave: "square", cutoff: 2200, attack: 0.004 },
     // Dance loops sit on long, even chords; a sus pickup builds into the next phrase.
     changes: [
       { at: 0, patterns: [TWO_BARS] },
@@ -178,7 +182,6 @@ export const CHORD_STYLES: Record<string, {
     minor: ["i bVI bIII bVII", "i bVI iv V", "i bVII bVI V", "i bIII bVII IV", "i5 bVI5 bVII5 i5", "isus2 bVI bIII V"],
     rhythm: [1, 0.1, 0.7, 0.1, 0.8, 0.1, 0.7, 0.1, 0.9, 0.1, 0.7, 0.1, 0.8, 0.15, 0.75, 0.3],
     legato: 0.9,
-    tone: { wave: "sawtooth", cutoff: 1900, attack: 0.012 },
     // Epic holds chords for a long time and lets them swell.
     changes: [
       { at: 0, patterns: ["64 64 64 64", "64 64 96 32"] },
@@ -192,16 +195,7 @@ export const CHORD_STYLES: Record<string, {
 };
 
 
-/** Oscillator shapes for the chords; "style" uses the chord style's own. */
-export const CHORD_WAVES: { value: string; label: string }[] = [
-  { value: "style", label: "Style's own" },
-  { value: "sine", label: "Soft (sine)" },
-  { value: "triangle", label: "Mellow (triangle)" },
-  { value: "sawtooth", label: "Bright (saw)" },
-  { value: "square", label: "Hollow (square)" },
-];
-
-/** Filter wobble speeds, in beats per cycle. */
+/** Wobble speeds, in beats per cycle. */
 const WOBBLE_RATES = [8, 4, 2, 1, 0.5];
 export const WOBBLE_RATE_LABELS = ["2 bars", "1 bar", "½ bar", "1 beat", "½ beat"];
 
@@ -273,19 +267,28 @@ export interface SequencerState {
   chordDensity: number;
   /** How much the comping rhythm changes from bar to bar. */
   chordRhythm: number;
-  // Chord sound: "style" keeps the style's own wave; the rest are 0..1 except the
+  /** How much each pass of the progression repeats the last one's variations (Marbles' déjà vu). */
+  chordDejaVu: number;
+  // Chord sound: a Plaits patch plus these, 0..1 except the
   // wobble rate, an index into WOBBLE_RATES.
-  chordWave: string;
-  chordBright: number;
-  chordSpread: number;
   chordAttack: number;
-  chordRelease: number;
   chordWobble: number;
   chordWobbleRate: number;
+  /** Sweeps the voicing through inversions, as Plaits' chord engine does; 0.5 is as voiced. */
+  chordInversion: number;
+  chordStrum: number;
   /** Octaves up or down from where the chords are voiced. */
   chordOctave: number;
-  /** Filter resonance, 0..1. */
-  chordReso: number;
+  /** Plaits engine name (see ENGINE_CHOICES). */
+  chordEngine: string;
+  chordHarmonics: number;
+  chordTimbre: number;
+  chordMorph: number;
+  /** -1..1: how far each note's decay envelope pushes Timbre and Morph. */
+  chordTimbreEnv: number;
+  chordMorphEnv: number;
+  chordDecay: number;
+  chordColour: number;
   /** Which progression of the style is playing. */
   prog: number;
   // Melody
@@ -295,26 +298,34 @@ export interface SequencerState {
   melodyRange: number;
   /** 0..1: straight to syncopated, repeating and clipped. */
   melodyGroove: number;
-  // Melody sound (it's also what a MIDI keyboard plays through)
-  melodyWave: string;
+  // Melody sound, a Plaits patch (it's also what a MIDI keyboard plays through)
+  /** Plaits engine name (see ENGINE_CHOICES). */
+  melodyEngine: string;
+  melodyHarmonics: number;
+  melodyTimbre: number;
+  melodyMorph: number;
+  /** -1..1: how far each note's decay envelope pushes Timbre and Morph. */
+  melodyTimbreEnv: number;
+  melodyMorphEnv: number;
+  melodyDecay: number;
+  melodyColour: number;
   melodyOctave: number;
-  melodyBright: number;
-  melodyReso: number;
   melodyAttack: number;
-  melodyRelease: number;
-  melodyThick: number;
-  melodyVibrato: number;
   melodyGlide: number;
-  // Bass sound
-  bassWave: string;
+  // Bass sound, a Plaits patch
+  /** Plaits engine name (see ENGINE_CHOICES). */
+  bassEngine: string;
+  bassHarmonics: number;
+  bassTimbre: number;
+  bassMorph: number;
+  /** -1..1: how far each note's decay envelope pushes Timbre and Morph. */
+  bassTimbreEnv: number;
+  bassMorphEnv: number;
+  bassDecay: number;
+  bassColour: number;
   bassOctave: number;
   bassSub: number;
-  bassCutoff: number;
-  bassReso: number;
-  bassEnv: number;
-  bassDecay: number;
   bassGlide: number;
-  bassDrive: number;
   // Per-drum sound: on/off, fader and pan, pitch in semitones, and 0..1 decay and tone.
   kickOn: boolean; kickVolume: number; kickPan: number; kickPitch: number; kickDecay: number; kickTone: number;
   snareOn: boolean; snareVolume: number; snarePan: number; snarePitch: number; snareDecay: number; snareTone: number;
@@ -332,6 +343,27 @@ export interface SequencerState {
   spaceSize: number;
 }
 
+type SoundKey = "Engine" | "Harmonics" | "Timbre" | "Morph" | "TimbreEnv" | "MorphEnv" | "Decay" | "Colour";
+type SoundState<P extends string> = { [K in SoundKey as `${P}${K}`]: K extends "Engine" ? string : number };
+
+function sound<P extends string>(prefix: P, engine: EngineName, v: number[]): SoundState<P> {
+  const keys: SoundKey[] = ["Harmonics", "Timbre", "Morph", "TimbreEnv", "MorphEnv", "Decay", "Colour"];
+  const out: Record<string, string | number> = { [`${prefix}Engine`]: engine };
+  keys.forEach((k, i) => (out[`${prefix}${k}`] = v[i]));
+  return out as SoundState<P>;
+}
+
+/**
+ * Each track's starting sound: a round analog bass with a plucky envelope on
+ * its shape, a string-machine pad for the chords and a folded lead.
+ * Order: harmonics, timbre, morph, env → timbre, env → morph, decay, colour.
+ */
+export const SOUND_DEFAULTS = {
+  bass: sound("bass", "analog", [0.5, 0.25, 0.6, 0.45, 0, 0.45, 0.6]),
+  chord: sound("chord", "strings", [0.55, 0.6, 0.35, 0, 0, 0.8, 0.4]),
+  melody: sound("melody", "fold", [0.5, 0.2, 0.5, 0.35, 0, 0.55, 0.5]),
+};
+
 export function defaultState(): SequencerState {
   const s: SequencerState = {
     tempo: 112, swing: 0, scale: "minorPent", root: 9, sound: true, style: "broken", hold: false, seed: 1,
@@ -342,13 +374,11 @@ export function defaultState(): SequencerState {
     hatDensity: 0, hatVariation: 0.4, hatRotate: 0, hatLength: STEPS, hatReset: "0",
     bassStyle: "pulse", bassDensity: 0.4, bassRange: 3, bassVariation: 0.3,
     chordStyle: "pop", chordVariation: 0.3, chordDensity: 0.3, chordRhythm: 0.25, prog: 0,
-    chordWave: "style", chordBright: 0.5, chordSpread: 0, chordAttack: 0, chordRelease: 0, chordWobble: 0, chordWobbleRate: 2,
-    chordOctave: 0, chordReso: 0,
+    chordDejaVu: 0, chordAttack: 0, chordWobble: 0, chordWobbleRate: 2, chordInversion: 0.5, chordStrum: 0, chordOctave: 0,
     melodyStyle: "wander", melodyDensity: 0.4, melodyRange: 8, melodyGroove: 0.3,
-    melodyWave: "triangle", melodyOctave: 0, melodyBright: 0.5, melodyReso: 0, melodyAttack: 0, melodyRelease: 0,
-    melodyThick: 0, melodyVibrato: 0, melodyGlide: 0,
-    bassWave: "sawtooth", bassOctave: 0, bassSub: 0.75, bassCutoff: 0.5, bassReso: 0.3, bassEnv: 0.5, bassDecay: 0.5,
-    bassGlide: 0, bassDrive: 0,
+    melodyOctave: 0, melodyAttack: 0, melodyGlide: 0,
+    bassOctave: 0, bassSub: 0.5, bassGlide: 0,
+    ...SOUND_DEFAULTS.bass, ...SOUND_DEFAULTS.chord, ...SOUND_DEFAULTS.melody,
     kickOn: true, kickVolume: 0.8, kickPan: 0, kickPitch: 0, kickDecay: 0.5, kickTone: 0.5,
     snareOn: true, snareVolume: 0.8, snarePan: 0, snarePitch: 0, snareDecay: 0.5, snareTone: 0.5,
     hatOn: true, hatVolume: 0.8, hatPan: 0, hatPitch: 0, hatDecay: 0.5, hatTone: 0.5,
@@ -393,9 +423,9 @@ export function sanitizeState(saved: unknown): SequencerState {
   if (!(s.bassStyle in BASS_STYLES)) s.bassStyle = "pulse";
   if (!(s.chordStyle in CHORD_STYLES)) s.chordStyle = "pop";
   if (!(s.melodyStyle in MELODY_STYLES)) s.melodyStyle = "wander";
-  if (!CHORD_WAVES.some((w) => w.value === s.chordWave)) s.chordWave = "style";
-  if (!SYNTH_WAVES.some((w) => w.value === s.bassWave)) s.bassWave = "sawtooth";
-  if (!SYNTH_WAVES.some((w) => w.value === s.melodyWave)) s.melodyWave = "triangle";
+  for (const prefix of Object.values(SOUND_PREFIX)) {
+    if (!ENGINES.includes(str[`${prefix}Engine`] as EngineName)) str[`${prefix}Engine`] = SOUND_DEFAULTS[prefix][`${prefix}Engine` as never];
+  }
   const clampInt = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(v)));
   s.bassOctave = clampInt(s.bassOctave, -2, 1);
   s.chordOctave = clampInt(s.chordOctave, -1, 1);
@@ -544,6 +574,9 @@ export class Sequencer {
   private slots: number[] = [];
   /** The progression this pass plays, before approach chords are added. */
   private base: Chord[] = [];
+  /** What each chord of the progression last became, for Déjà vu, and which progression that was. */
+  private memory: Chord[] = [];
+  private memoryKey = "";
   /** Which harmonic-rhythm pattern of its level this pass uses. */
   private rhythmPick = 0;
   /** The level of harmonic rhythm `cycle` was laid out for. */
@@ -672,15 +705,23 @@ export class Sequencer {
   private buildCycle(first: boolean): void {
     const r = this.rng;
     const v = this.held("chords") || first ? 0 : this.state.chordVariation;
+    // Déjà vu, as on Marbles: how likely each change is to replay what this slot did last time instead of something new.
+    const dv = this.state.chordDejaVu;
     const list = this.progressions();
-    if (r() < v * 0.5) this.state.prog = (this.state.prog + 1 + Math.floor(r() * (list.length - 1))) % list.length;
+    if (r() < v * 0.5 * (1 - dv)) this.state.prog = (this.state.prog + 1 + Math.floor(r() * (list.length - 1))) % list.length;
+    const key = `${this.state.chordStyle}:${this.state.scale}:${mod(this.state.prog, list.length)}`;
+    if (key !== this.memoryKey || first) {
+      this.memory = [];
+      this.memoryKey = key;
+    }
     const syms = list[mod(this.state.prog, list.length)].split(" ");
-    this.base = syms.map((s) => {
+    this.base = syms.map((s, i) => {
+      if (this.memory[i] && v > 0 && r() < dv) return this.memory[i];
       const c = parseChord(s);
-      return r() < v * 0.45 ? this.substitute(c) : c;
+      return (this.memory[i] = r() < v * 0.45 ? this.substitute(c) : c);
     });
     if (first) this.rhythmPick = 0;
-    else if (!this.held("chords") && r() < this.state.chordRhythm * 0.6) this.rhythmPick = Math.floor(r() * 4);
+    else if (!this.held("chords") && r() < this.state.chordRhythm * 0.6 * (1 - dv)) this.rhythmPick = Math.floor(r() * 4);
     this.layout();
     // Epic's wildcard: some passes lift the whole song up a step or two, then it comes home.
     if (this.state.chordStyle === "epic" && !first && !this.held("chords")) {
@@ -814,7 +855,7 @@ export class Sequencer {
       }
     }
     if (!this.held("chords")) {
-      for (let i = 0; i < STEPS; i++) if (r() < s.chordRhythm * 0.3) this.chordGate[i] = r();
+      for (let i = 0; i < STEPS; i++) if (r() < s.chordRhythm * 0.3 * (1 - s.chordDejaVu)) this.chordGate[i] = r();
     }
     if (!this.held("melody")) {
       for (let i = 0; i < STEPS; i++) {
@@ -859,21 +900,25 @@ export class Sequencer {
     return { pitch: this.num(`${key}Pitch`), decay: this.num(`${key}Decay`), tone: this.num(`${key}Tone`) };
   }
 
-  /** The bass synth's controls. */
-  bassTone(): BassTone {
+  /** A synth track's sound as a Plaits patch; MIDI keyboard notes play through the melody's. */
+  patch(track: SynthTrack): Patch {
     const s = this.state;
+    const p = SOUND_PREFIX[track];
+    const n = (k: string) => this.num(`${p}${k}`);
+    const engine = ENGINES.indexOf((s as unknown as Record<string, string>)[`${p}Engine`] as EngineName);
+    const chords = track === "chords";
+    const beat = 60 / s.tempo;
     return {
-      wave: s.bassWave as Waveform, sub: s.bassSub, cutoff: s.bassCutoff, reso: s.bassReso, env: s.bassEnv,
-      decay: s.bassDecay, glide: s.bassGlide, drive: s.bassDrive,
-    };
-  }
-
-  /** The melody synth's controls; MIDI keyboard notes play through it too. */
-  melodyTone(): MelodyTone {
-    const s = this.state;
-    return {
-      wave: s.melodyWave as Waveform, bright: s.melodyBright, reso: s.melodyReso, attack: s.melodyAttack,
-      release: s.melodyRelease, thick: s.melodyThick, vibrato: s.melodyVibrato, glide: s.melodyGlide,
+      engine: Math.max(0, engine),
+      harmonics: n("Harmonics"), timbre: n("Timbre"), morph: n("Morph"),
+      timbreEnv: n("TimbreEnv"), morphEnv: n("MorphEnv"), decay: n("Decay"), colour: n("Colour"),
+      glide: track === "chords" ? 0 : n("Glide"),
+      attack: track === "bass" ? 0 : n("Attack"),
+      sub: track === "bass" ? s.bassSub : 0,
+      inversion: chords ? s.chordInversion : 0.5,
+      strum: chords ? s.chordStrum : 0,
+      wobbleHz: 1 / (beat * WOBBLE_RATES[Math.max(0, Math.min(WOBBLE_RATES.length - 1, Math.round(s.chordWobbleRate)))]),
+      wobbleDepth: chords ? s.chordWobble : 0,
     };
   }
 
@@ -1002,24 +1047,6 @@ export class Sequencer {
     const style = CHORD_STYLES[s.chordStyle] ?? CHORD_STYLES.pop;
     const step = a % STEPS;
     return this.chordGate[step] < chance(style.rhythm[step], s.chordDensity);
-  }
-
-  /** The style's chord sound with the Sound controls applied. */
-  private chordTone(base: ChordTone): ChordTone {
-    const s = this.state;
-    const wave = s.chordWave === "style" ? base.wave : (s.chordWave as ChordTone["wave"]);
-    const beat = 60 / s.tempo;
-    return {
-      wave,
-      // Brightness 50% is the style's own cutoff; each end is two octaves away.
-      cutoff: base.cutoff * 2 ** ((s.chordBright - 0.5) * 4),
-      attack: base.attack + s.chordAttack ** 2 * 1.5,
-      release: 0.06 + s.chordRelease ** 2 * 2.5,
-      spread: s.chordSpread * 30,
-      wobbleRate: 1 / (beat * WOBBLE_RATES[Math.max(0, Math.min(WOBBLE_RATES.length - 1, Math.round(s.chordWobbleRate)))]),
-      wobbleDepth: s.chordWobble,
-      reso: s.chordReso,
-    };
   }
 
   // ---- Bass -------------------------------------------------------------------
@@ -1235,7 +1262,7 @@ export class Sequencer {
         while (gap < 16 && !this.bassOn(a + gap) && !this.isChange(a + gap)) gap++;
         const velocity = 0.55 + 0.4 * (style.weights[step] || 0.5);
         events.push({ note, velocity, role: "bassline", x: Math.min(1, Math.max(0, (note - 24) / 31)), source: "sequencer" });
-        if (s.sound) this.audio.bass(note, velocity, t, len * Math.max(0.5, gap * style.legato) * 0.95, this.bassTone());
+        if (s.sound) this.audio.note("bass", [note], velocity, t, len * Math.max(0.5, gap * style.legato) * 0.95);
       }
 
       if (this.chordOn(a)) {
@@ -1250,7 +1277,7 @@ export class Sequencer {
         if (s.chordOctave) notes = notes.map((n) => n + 12 * s.chordOctave);
         const mean = notes.reduce((x, y) => x + y, 0) / notes.length;
         events.push({ note: 48 + mod(this.key + c.root, 12), notes, velocity, role: "chord", x: Math.min(1, Math.max(0, (mean - 50) / 26)), source: "sequencer" });
-        if (s.sound) this.audio.chord(notes, velocity, t, len * Math.max(0.6, gap * style.legato), this.chordTone(style.tone));
+        if (s.sound) this.audio.note("chords", notes, velocity, t, len * Math.max(0.6, gap * style.legato));
       }
 
       if (this.melodyOn(step, this.fillBar)) {
@@ -1262,7 +1289,7 @@ export class Sequencer {
         const gap = this.melodyGap(step);
         const hold = Math.max(0.35, gap * (1 - 0.55 * s.melodyGroove));
         events.push({ note, velocity, role: "tone", x, source: "sequencer" });
-        if (s.sound) this.audio.melody(note, velocity, t, len * hold * 0.95, this.melodyTone());
+        if (s.sound) this.audio.note("melody", [note], velocity, t, len * hold * 0.95);
       }
 
       this.queue.push({ time: t, step, drumSteps, chord: this.schedChord, events });

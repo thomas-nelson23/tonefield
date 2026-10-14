@@ -3,7 +3,7 @@ import { noteHue } from "../models/lib/music";
 import { paintRange, renderParamControls, type ParamControls } from "../ui/controls";
 import type { Grade } from "../ui/grade";
 import { knob, fader, type Dial } from "../ui/knob";
-import { AudioEngine, BeatDetector, type DrumKind, type TrackKey } from "./audio";
+import { AudioEngine, BeatDetector, type DrumKind, type SynthTrack, type TrackKey } from "./audio";
 import { dispatchMidi, openMidi, type MidiInputs } from "./midi";
 import { applyModulation, macroSpecs, modulatable, ModSources, SOURCES, sourceLabel, type NumberSpec } from "./modulation";
 import {
@@ -11,8 +11,8 @@ import {
   type GlobalPreset,
 } from "./globals";
 import {
-  BASS_STYLES, CHORD_STYLES, CHORD_WAVES, WOBBLE_RATE_LABELS, DRUM_RESETS, DRUMS, ECHO_TIME_LABELS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES,
-  STEPS, STYLES, SYNTH_WAVES, TRACKS, Sequencer, applyStyleDensities, chordName, faderGain, sanitizeState, type DrumKey, type SequencerState,
+  BASS_STYLES, CHORD_STYLES, ENGINE_CHOICES, SOUND_DEFAULTS, WOBBLE_RATE_LABELS, DRUM_RESETS, DRUMS, ECHO_TIME_LABELS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES,
+  STEPS, STYLES, TRACKS, Sequencer, applyStyleDensities, chordName, faderGain, sanitizeState, type DrumKey, type SequencerState,
 } from "./sequencer";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -67,6 +67,8 @@ const GLOBAL_NUMBERS = GLOBAL_SPECS.filter((p): p is NumberSpec => p.kind === "n
 
 /** Seconds between redraws of the live meters, playheads and modulation bars: about 20 a second. */
 const UI_INTERVAL = 0.04;
+
+const SYNTH_TRACKS: SynthTrack[] = ["bass", "chords", "melody"];
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const choices = (rec: Record<string, { label: string }>) => Object.entries(rec).map(([value, o]) => ({ value, label: o.label }));
@@ -127,6 +129,37 @@ function mixerSpecs(key: TrackKey, label: string): ParamSpec[] {
   ];
 }
 
+const signedPct = (v: number) => signed(Math.round(v * 100), "%");
+
+/**
+ * A track's Plaits controls. As on the module, Harmonics, Timbre and Morph do
+ * something different on each engine; the descriptions say what.
+ */
+function soundSpecs(prefix: "bass" | "chord" | "melody"): ParamSpec[] {
+  const d = SOUND_DEFAULTS[prefix] as unknown as Record<string, number | string>;
+  const knob = (key: string, label: string, description: string, min = 0): ParamSpec => ({
+    kind: "number", key: `${prefix}${key}`, label, group: "Sound", min, max: 1, step: 0.01, default: d[`${prefix}${key}`] as number,
+    format: min < 0 ? signedPct : pct, description,
+  });
+  return [
+    { kind: "choice", key: `${prefix}Engine`, label: "Engine", group: "Sound", options: ENGINE_CHOICES, default: d[`${prefix}Engine`] as string,
+      description: "Which Plaits synthesis model plays the notes." },
+    knob("Harmonics", "Harmonics",
+      "Analog: the second oscillator's interval. Waveshaper: the shaper's curve. FM: the frequency ratio. Grain: the formant ratio. "
+      + "Additive: extra peaks in the spectrum. String machine: brightness. Pluck and modal: from inharmonic to bell-like."),
+    knob("Timbre", "Timbre",
+      "Analog: the first oscillator's shape. Waveshaper: how hard it folds. FM: the modulation depth. Grain: the formant's pitch. "
+      + "Additive: which harmonics are loudest. String machine: the ensemble chorus. Pluck and modal: how bright the strike is."),
+    knob("Morph", "Morph",
+      "Analog: the second oscillator's shape. Waveshaper: the wave's skew. FM: feedback. Grain: the grain's shape. "
+      + "Additive: how wide the spectrum is. String machine: the organ registration. Pluck and modal: how long it rings."),
+    knob("TimbreEnv", "Env → Timbre", "How far each note's decay envelope pushes Timbre, up or down.", -1),
+    knob("MorphEnv", "Env → Morph", "How far each note's decay envelope pushes Morph, up or down.", -1),
+    knob("Decay", "Decay", "The low-pass gate: short plucks to long rings. Past 60% notes also hold for as long as they last."),
+    knob("Colour", "Colour", "The low-pass gate's colour: 0% is a plain fade, higher closes like a filter, darkening as it decays."),
+  ];
+}
+
 /**
  * The sequencer's controls, by part. They're drawn as sliders and dropdowns,
  * and can be mapped to a MIDI knob (as `gen#<key>`).
@@ -146,23 +179,12 @@ const PARTS: { part: string; specs: ParamSpec[] }[] = [
       description: "Which notes it may leave the root for: octave, fifth, chord tones, then passing notes." },
     { kind: "number", key: "bassVariation", label: "Variation", min: 0, max: 1, step: 0.01, default: 0.3, format: pct,
       description: "How much the bass line changes from bar to bar." },
-    { kind: "choice", key: "bassWave", label: "Wave", group: "Sound", options: SYNTH_WAVES, default: "sawtooth",
-      description: "The oscillator over the sub: saw is buzzy, square hollow, triangle and sine round." },
+    ...soundSpecs("bass"),
     { kind: "number", key: "bassOctave", label: "Octave", group: "Sound", min: -2, max: 1, step: 1, default: 0, format: octaves },
-    { kind: "number", key: "bassSub", label: "Sub", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.75, format: pct,
-      description: "The pure sine an octave of weight under the bass." },
-    { kind: "number", key: "bassCutoff", label: "Cutoff", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
-      description: "Darker to brighter. 50% is the stock sound." },
-    { kind: "number", key: "bassReso", label: "Resonance", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.3, format: pct,
-      description: "A peak at the cutoff, for a squelchier, acid sound." },
-    { kind: "number", key: "bassEnv", label: "Envelope", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
-      description: "How far the filter opens at the start of each note." },
-    { kind: "number", key: "bassDecay", label: "Decay", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
-      description: "How quickly the filter closes after each note starts: short plucks to long sweeps." },
+    { kind: "number", key: "bassSub", label: "Sub", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: "A pure sine under the engine, for weight." },
     { kind: "number", key: "bassGlide", label: "Glide", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
       description: "Slides each note's pitch in from the last one." },
-    { kind: "number", key: "bassDrive", label: "Drive", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
-      description: "Saturates the bass for grit and growl." },
   ] },
   { part: "Chords", specs: [
     { kind: "choice", key: "chordStyle", label: "Style", options: choices(CHORD_STYLES), default: "pop" },
@@ -172,23 +194,21 @@ const PARTS: { part: string; specs: ParamSpec[] }[] = [
       description: "Low holds each chord for bars at a time, as the style would; higher fits in more chord changes and plays them in a busier rhythm." },
     { kind: "number", key: "chordRhythm", label: "Rhythm variation", min: 0, max: 1, step: 0.01, default: 0.25, format: pct,
       description: "How much the chord rhythm changes from bar to bar, and how often the pattern of chord changes is mixed up." },
-    { kind: "choice", key: "chordWave", label: "Wave", group: "Sound", options: CHORD_WAVES, default: "style",
-      description: "The basic tone of the chords. Style's own uses the sound that comes with the chord style." },
-    { kind: "number", key: "chordBright", label: "Brightness", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
-      description: "Darker to brighter. 50% is the style's own." },
-    { kind: "number", key: "chordSpread", label: "Thickness", group: "Sound", min: 0, max: 1, step: 0.01, default: 0,
-      format: pct, description: "Doubles every note with a slightly detuned copy, for a wider, lusher chord." },
+    { kind: "number", key: "chordDejaVu", label: "Déjà vu", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "As on Marbles: how often a variation comes back instead of a new one. 0% is always fresh; 100% locks the varied progression and its rhythm into a loop." },
+    ...soundSpecs("chord"),
+    { kind: "number", key: "chordInversion", label: "Inversion", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5,
+      format: (v) => signed(Math.round((v - 0.5) * 2 * 100), "%"),
+      description: "Sweeps the voicing down or up through its inversions, crossfading each note an octave as Plaits' chord engine does. 0 is as voiced." },
+    { kind: "number", key: "chordStrum", label: "Strum", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "Starts the notes one after another, lowest first, like a strummed chord." },
     { kind: "number", key: "chordAttack", label: "Attack", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
       description: "How slowly the chords fade in: low plucks, high swells." },
-    { kind: "number", key: "chordRelease", label: "Release", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
-      description: "How long the chords ring on after they end." },
     { kind: "number", key: "chordWobble", label: "Wobble", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
-      description: "Sweeps the tone open and closed in time with the music." },
+      description: "Sweeps Timbre up and down in time with the music." },
     { kind: "number", key: "chordWobbleRate", label: "Wobble speed", group: "Sound", min: 0, max: WOBBLE_RATE_LABELS.length - 1, step: 1,
       default: 2, format: (v) => WOBBLE_RATE_LABELS[v] ?? String(v), description: "How long one sweep of the wobble takes." },
     { kind: "number", key: "chordOctave", label: "Octave", group: "Sound", min: -1, max: 1, step: 1, default: 0, format: octaves },
-    { kind: "number", key: "chordReso", label: "Resonance", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
-      description: "A peak at the filter's edge; strongest with Wobble." },
   ] },
   { part: "Melody", specs: [
     { kind: "choice", key: "melodyStyle", label: "Style", options: choices(MELODY_STYLES), default: "wander" },
@@ -198,21 +218,10 @@ const PARTS: { part: string; specs: ParamSpec[] }[] = [
       description: "How many melody notes play." },
     { kind: "number", key: "melodyGroove", label: "Groove", min: 0, max: 1, step: 0.01, default: 0.3, format: pct,
       description: "Adds rhythm: syncopated, clipped notes, and the second half-bar answers the first." },
-    { kind: "choice", key: "melodyWave", label: "Wave", group: "Sound", options: SYNTH_WAVES, default: "triangle",
-      description: "The oscillator: triangle is soft, saw bright, square hollow, sine pure." },
+    ...soundSpecs("melody"),
     { kind: "number", key: "melodyOctave", label: "Octave", group: "Sound", min: -2, max: 2, step: 1, default: 0, format: octaves },
-    { kind: "number", key: "melodyBright", label: "Brightness", group: "Sound", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
-      description: "Darker to brighter. 50% is the stock sound." },
-    { kind: "number", key: "melodyReso", label: "Resonance", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
-      description: "A peak at the filter's edge, for a sharper, vocal tone." },
     { kind: "number", key: "melodyAttack", label: "Attack", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
       description: "How slowly notes fade in: low plucks, high swells." },
-    { kind: "number", key: "melodyRelease", label: "Release", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
-      description: "How long notes ring on after they end." },
-    { kind: "number", key: "melodyThick", label: "Thickness", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
-      description: "Doubles each note with a detuned copy, for a wider sound." },
-    { kind: "number", key: "melodyVibrato", label: "Vibrato", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
-      description: "A wavering pitch that eases in on each note." },
     { kind: "number", key: "melodyGlide", label: "Glide", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
       description: "Slides each note's pitch in from the last one." },
   ] },
@@ -353,6 +362,7 @@ export class Studio {
     if (![...TRACKS.map((t) => t.key), "master"].includes(this.settings.mixerTrack)) this.settings.mixerTrack = "drums";
     this.seq = liveSeq = new Sequencer(this.audio, seq);
     this.audio.mix(this.seq.mixSettings());
+    for (const t of SYNTH_TRACKS) this.audio.patch(t, this.seq.patch(t));
     this.sources.decay = this.settings.decay;
     this.buildDock();
     void this.initMidi();
@@ -440,6 +450,7 @@ export class Studio {
       if (v > 0) this.pending.push({ note: 36, velocity: v, role: "kick", x: 0.5, source: "audio" });
     }
     this.audio.mix(this.seq.mixSettings());
+    for (const t of SYNTH_TRACKS) this.audio.patch(t, this.seq.patch(t));
     const events = [...this.seq.drain(), ...this.pending];
     this.pending = [];
     for (const ev of events) {
@@ -607,7 +618,7 @@ export class Studio {
       noteOn: (ev) => {
         this.pending.push(ev);
         if (this.settings.thru) {
-          if (ev.role === "tone") this.audio.noteOn(ev.note, ev.velocity, this.seq.melodyTone());
+          if (ev.role === "tone") this.audio.noteOn(ev.note, ev.velocity);
           else this.audio.drum(ev.role as DrumKind, ev.velocity, 0, this.seq.drumSound(ev.role as DrumKey));
         }
       },
