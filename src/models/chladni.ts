@@ -1,6 +1,6 @@
-import type { ModelDefinition, MusicFrame, NoteEvent, ParamValues, PointerInput, SimulationModel, Viewport } from "./types";
+import { jitterScale, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { Feedback, applyFeedback, colourParam, feedbackParams, hueToward, schemeHue } from "./lib/visual";
-import { gravityAt, gravityModeParam, isUniform } from "./lib/gravity";
+import { gravityTo, gravityModeParam, isUniform } from "./lib/gravity";
 import { Raster, hsl, rgb } from "./lib/raster";
 
 /**
@@ -25,6 +25,20 @@ SQUARE.sort((a, b) => a[0] ** 2 + a[1] ** 2 - (b[0] ** 2 + b[1] ** 2));
 const ROUND: [number, number, number][] = [];
 for (let n = 2; n <= 14; n++) for (let m = 1; m <= 5; m++) ROUND.push([n, m, 0]);
 ROUND.sort((a, b) => a[0] + a[1] * 3 - (b[0] + b[1] * 3));
+
+/**
+ * Cosine by table: the sand loop evaluates eight trig functions per grain per
+ * step, and a lookup is several times faster than Math.cos with no visible
+ * difference in where the sand settles. 8192 entries round the circle; the
+ * offset keeps the index positive for any argument the plate sees.
+ */
+const TRIG_N = 8192;
+const TRIG_SCALE = TRIG_N / (Math.PI * 2);
+const TRIG_OFFSET = TRIG_N * 4096;
+const COS_TABLE = new Float32Array(TRIG_N);
+for (let i = 0; i < TRIG_N; i++) COS_TABLE[i] = Math.cos((i / TRIG_N) * Math.PI * 2);
+const cosT = (x: number): number => COS_TABLE[(x * TRIG_SCALE + TRIG_OFFSET) & (TRIG_N - 1)];
+const sinT = (x: number): number => COS_TABLE[(x * TRIG_SCALE + TRIG_OFFSET - TRIG_N / 4) & (TRIG_N - 1)];
 
 /** Most pixels the sand is drawn at before it is stretched onto the canvas. */
 const MAX_PIXELS = 3_000_000;
@@ -62,6 +76,9 @@ class CymaticsSim implements SimulationModel {
   private stepped = false;
   private time = 0;
   private raster: Raster | null = null;
+  private grav = new Float64Array(2);
+  /** The colour the sand eases toward, set each step from the music. */
+  private hueTarget = 45;
 
   reset(view: Viewport, p: ParamValues): void {
     this.view = view;
@@ -121,19 +138,19 @@ class CymaticsSim implements SimulationModel {
     const { sx, sy } = this;
     if (!this.round) {
       const X = PI * (0.5 + (x - 0.5) * sx), Y = PI * (0.5 + (y - 0.5) * sy);
-      const cnx = Math.cos(n * X), cmx = Math.cos(m * X), cny = Math.cos(n * Y), cmy = Math.cos(m * Y);
+      const cnx = cosT(n * X), cmx = cosT(m * X), cny = cosT(n * Y), cmy = cosT(m * Y);
       out[0] = cnx * cmy + sign * cmx * cny;
-      out[1] = sx * PI * (-n * Math.sin(n * X) * cmy - sign * m * Math.sin(m * X) * cny);
-      out[2] = sy * PI * (-m * cnx * Math.sin(m * Y) - sign * n * cmx * Math.sin(n * Y));
+      out[1] = sx * PI * (-n * sinT(n * X) * cmy - sign * m * sinT(m * X) * cny);
+      out[2] = sy * PI * (-m * cnx * sinT(m * Y) - sign * n * cmx * sinT(n * Y));
       return;
     }
     // Polar: a = cos(nθ + turn)·cos(mπr) on u, v in -1..1 across the middle square (further out on a full screen).
     const u = (2 * x - 1) * sx, v = (2 * y - 1) * sy;
     const r2 = Math.max(1e-4, u * u + v * v), r = Math.sqrt(r2);
     const th = n * Math.atan2(v, u) + this.rot;
-    const ct = Math.cos(th), cr = Math.cos(m * PI * r);
-    const ar = -ct * m * PI * Math.sin(m * PI * r);
-    const at = -n * Math.sin(th) * cr;
+    const ct = cosT(th), cr = cosT(m * PI * r);
+    const ar = -ct * m * PI * sinT(m * PI * r);
+    const at = -n * sinT(th) * cr;
     out[0] = ct * cr;
     out[1] = 2 * sx * ((u / r) * ar - (v / r2) * at);
     out[2] = 2 * sy * ((v / r) * ar + (u / r2) * at);
@@ -189,12 +206,17 @@ class CymaticsSim implements SimulationModel {
 
     const amp = (p.vibration as number) * (1 + Math.min(1.5, music.level) * (p.loudShake as number)) + this.shake;
     this.shake *= Math.exp(-dt * 4);
+    const scheme = p.colours as string;
+    this.hueTarget = scheme === "notes" ? music.hue : schemeHue(scheme, 0.5, music.hue, music.beats);
+    this.hue = hueToward(this.hue, this.hueTarget, Math.min(1, dt * 4.8));
     const busy = this.busyness();
     // Gradient descent toward the nodal lines overshoots (and the sand jitters across the line)
     // once the per-step gain passes ~1, which happens sooner on busy modes, so cap the step.
     const pull = Math.min((p.settle as number) * dt * 0.25, 0.9 / (Math.PI * busy));
-    const jitter = amp * dt * 0.05;
-    const drift = (0.15 + (p.vibration as number) * 0.25) * dt;
+    // The shaking is a random walk, so its per-step size goes with the square root of the step.
+    const rdt = jitterScale(dt) / 60;
+    const jitter = amp * rdt * 0.05;
+    const drift = (0.15 + (p.vibration as number) * 0.25) * rdt;
     // Slopes are steeper along the long side of a full-screen plate (it is
     // more plate-widths across), so steps there are scaled back to match.
     const norm = 1 / (Math.PI * busy);
@@ -207,7 +229,9 @@ class CymaticsSim implements SimulationModel {
     const uniform = isUniform(gMode);
     // Swirl circles the centre rather than pouring sand off the plate, so it keeps the rim.
     const recycle = tilted && p.endlessFlow !== false && gMode !== "swirl";
-    const [ugx, ugy] = uniform ? gravityAt(gMode, gPull, 0, 0, 1, 1, this.time) : [0, 0];
+    const grav = this.grav;
+    if (uniform) gravityTo(grav, gMode, gPull, 0, 0, 1, 1, this.time);
+    const ugx = uniform ? grav[0] : 0, ugy = uniform ? grav[1] : 0;
     let px = -1, py = -1;
     if (this.pointer) {
       const [ox, oy, pw, ph] = this.plate();
@@ -232,8 +256,8 @@ class CymaticsSim implements SimulationModel {
         if (uniform) { x += ugx / sx; y += ugy / sy; }
         else {
           // Worked out in square units so "out from the centre" points truly outward on a wide screen.
-          const [ax, ay] = gravityAt(gMode, gPull, x * sx, y * sy, sx, sy, this.time, 0.05);
-          x += ax / sx; y += ay / sy;
+          gravityTo(grav, gMode, gPull, x * sx, y * sy, sx, sy, this.time, 0.05);
+          x += grav[0] / sx; y += grav[1] / sy;
         }
       }
       if (px >= 0 && ((x - px) * sx) ** 2 + ((y - py) * sy) ** 2 < 0.004) {
@@ -316,8 +340,6 @@ class CymaticsSim implements SimulationModel {
     applyFeedback(this.fb, g, view, p, this.stepped);
     this.stepped = false;
     const [ox, oy, pw, ph] = this.plate();
-    const scheme = p.colours as string;
-    this.hue = hueToward(this.hue, scheme === "notes" ? m.hue : schemeHue(scheme, 0.5, m.hue, m.beats), 0.08);
     // Settled sand on the still lines glows in the main colour; sand still bouncing glows a second colour.
     // Grains are written straight into a pixel buffer the size of the plate: thousands of tiny
     // rectangles are slow to fill in software-rendered webviews, one image blit is not.

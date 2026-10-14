@@ -180,6 +180,18 @@ export interface MusicFrame {
   energy: number;
 }
 
+/**
+ * The step models were tuned at, in seconds. The host steps by however long
+ * each frame took, so anything a model does "per step" that should happen per
+ * second (iterations, random jitter) is scaled by `dt / NOMINAL_DT`.
+ */
+export const NOMINAL_DT = 1 / 60;
+
+/** Scale for a per-step random nudge so the random walk it makes covers the same ground per second at any step size. */
+export function jitterScale(dt: number): number {
+  return Math.sqrt(dt / NOMINAL_DT);
+}
+
 /** A silent frame, for stepping a model outside the main loop. */
 export const SILENT_MUSIC: MusicFrame = {
   kick: 0, snare: 0, hat: 0, tone: 0, bassline: 0, chord: 0, level: 0, bass: 0, mid: 0, treble: 0,

@@ -1,5 +1,5 @@
-import type { ModelDefinition, MusicFrame, ParamSpec, NoteEvent, ParamValues, PointerInput, SimulationModel, Viewport } from "./types";
-import { gravityAt, gravityModeParam, isUniform, uniformDir } from "./lib/gravity";
+import { NOMINAL_DT, type ModelDefinition, type MusicFrame, type ParamSpec, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
+import { gravityTo, gravityModeParam, isUniform, uniformDir } from "./lib/gravity";
 import { noteHue } from "./lib/music";
 import { Feedback, applyFeedback, colourParam, feedbackParams, schemeHue } from "./lib/visual";
 
@@ -60,6 +60,11 @@ class ClothSim implements SimulationModel {
   private tornList: number[] = [];
   private fb = new Feedback();
   private stepped = false;
+  /** The last step's length: a Verlet velocity is a per-step displacement, so kicks scale with it. */
+  private dt = NOMINAL_DT;
+  /** Constraint passes owed: Stiffness is passes per nominal step. */
+  private iterDebt = 0;
+  private grav = new Float64Array(2);
 
   reset(view: Viewport, p: ParamValues): void {
     this.view = view;
@@ -142,6 +147,16 @@ class ClothSim implements SimulationModel {
     const { x, y, px, py, pinned, n, homeX, homeY } = this;
     this.stepped = true;
     this.time += dt;
+    // Velocities are per-step displacements: a step of another length rescales them (see `impulse` too).
+    const stretch = dt / this.dt;
+    if (stretch !== 1) {
+      for (let k = 0; k < n; k++) {
+        px[k] = x[k] - (x[k] - px[k]) * stretch;
+        py[k] = y[k] - (y[k] - py[k]) * stretch;
+      }
+    }
+    this.dt = dt;
+    const grav = this.grav;
     const gravity = p.gravity as number;
     // The spectrum lifts each column from below, most at the hem: bass on the left, treble on the right.
     // Both are shares of gravity, so the fabric rises toward weightless but only flies off at the extremes.
@@ -156,7 +171,7 @@ class ClothSim implements SimulationModel {
     const [ux, uy] = uniformDir(mode, this.time);
     const { width: w, height: h } = this.view;
     const wind = (p.wind as number) * (0.6 + 0.4 * Math.sin(this.time * 1.3) + 0.2 * Math.sin(this.time * 3.7));
-    const damp = 0.995;
+    const damp = Math.pow(0.995, dt / NOMINAL_DT);
     const dt2 = dt * dt;
     const settle = Math.min(1, dt * 8);
     for (let k = 0; k < n; k++) {
@@ -174,7 +189,10 @@ class ClothSim implements SimulationModel {
       px[k] = x[k];
       py[k] = y[k];
       let gx = ux * gravity, gy = uy * gravity;
-      if (!uniform) [gx, gy] = gravityAt(mode, gravity, x[k], y[k], w, h, this.time);
+      if (!uniform) {
+        gravityTo(grav, mode, gravity, x[k], y[k], w, h, this.time);
+        gx = grav[0]; gy = grav[1];
+      }
       const col = k % cols, row = (k / cols) | 0;
       const depth = row / (rows - 1);
       const up = (spec[Math.min(spec.length - 1, Math.floor((col / cols) * spec.length))] * lift + billow) * depth;
@@ -187,7 +205,10 @@ class ClothSim implements SimulationModel {
     // Finer fabric needs more passes for a pull to travel the same distance.
     // Scaling by the square root keeps high resolutions from going limp
     // without the full (linear) cost.
-    const iters = Math.round((p.stiffness as number) * Math.sqrt(Math.max(1, this.cols / 48)));
+    const perStep = (p.stiffness as number) * Math.sqrt(Math.max(1, this.cols / 48));
+    this.iterDebt = Math.min(perStep * 2, this.iterDebt + perStep * (dt / NOMINAL_DT));
+    const iters = Math.floor(this.iterDebt + 1e-6);
+    this.iterDebt -= iters;
     const tear = p.tearable ? (p.tearLimit as number) * this.rest : Infinity;
     const { ca, cb, alive, rest } = this;
     for (let it = 0; it < iters; it++) {
@@ -247,13 +268,14 @@ class ClothSim implements SimulationModel {
     }
   }
 
-  /** Give every free point a velocity kick (Verlet velocity is x - px). */
+  /** Give every free point a velocity kick (Verlet velocity is x - px, per step, so it scales with the step). */
   private impulse(fx: (x: number, y: number) => [number, number]): void {
+    const scale = this.dt / NOMINAL_DT;
     for (let k = 0; k < this.n; k++) {
       if (this.pinned[k]) continue;
       const [dx, dy] = fx(this.x[k], this.y[k]);
-      this.px[k] -= dx;
-      this.py[k] -= dy;
+      this.px[k] -= dx * scale;
+      this.py[k] -= dy * scale;
     }
   }
 
