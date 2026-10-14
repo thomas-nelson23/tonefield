@@ -36,6 +36,8 @@ interface GlobalSettings {
   presets: GlobalPreset[];
   /** The mixer strip whose controls are open: a track or "master". */
   mixerTrack: TrackKey | "master";
+  /** The drum voice whose controls are open in the Drums panel. */
+  drumVoice: DrumKey;
 }
 
 /**
@@ -359,13 +361,14 @@ export class Studio {
     if (typeof saved.volume === "number" && saved.seq && !("masterVolume" in saved.seq)) seq.masterVolume = saved.volume;
     delete saved.volume;
     this.settings = {
-      thru: true, decay: 0.25, inputs: [], bindings: {}, dockHidden: false, musicOn: true, intensity: 1, mixerTrack: "drums",
+      thru: true, decay: 0.25, inputs: [], bindings: {}, dockHidden: false, musicOn: true, intensity: 1, mixerTrack: "drums", drumVoice: "kick",
       ...saved,
       seq,
       globals: sanitizeGlobals(saved.globals),
       presets: sanitizePresets(saved.presets),
     };
     if (![...TRACKS.map((t) => t.key), "master"].includes(this.settings.mixerTrack)) this.settings.mixerTrack = "drums";
+    if (!DRUMS.some((d) => d.key === this.settings.drumVoice)) this.settings.drumVoice = "kick";
     this.seq = liveSeq = new Sequencer(this.audio, seq);
     this.audio.mix(this.seq.mixSettings());
     this.sources.decay = this.settings.decay;
@@ -1097,18 +1100,35 @@ export class Studio {
 
     this.buildMixer(values, changed, spec);
 
-    // Drums: one row per drum beside the rings, its pattern on the left and its sound on the right.
-    const tracks = $("drum-tracks");
-    tracks.append(el("div", { className: "drum-track drum-head" }, el("span"), el("span", { className: "section-label", textContent: "Pattern" }),
-      el("span", { className: "section-label", textContent: "Sound" })));
+    // Drums: the voices listed beside the rings, each with its mode, and the selected voice's controls to the right.
+    const list = $("drum-voices");
+    const panels = $("drum-voice");
+    const ofKey = (part: string, keys: string[]) => keys.map((k) => specsOf(part).find((p) => p.key === k)!);
     for (const d of DRUMS) {
-      const pattern = el("div", { className: "drum-sliders" });
-      const sound = el("div", { className: "drum-sliders drum-sound" });
-      const name = el("div", { className: "drum-name", textContent: d.label });
-      name.style.color = d.colour;
+      const name = el("button", { type: "button", className: "drum-name", textContent: d.label, title: `Edit the ${d.label.toLowerCase()}` });
+      name.style.setProperty("--voice", d.colour);
       const onKey = `${d.key}On` as const;
       const muteDrum = el("button", { type: "button", className: "small strip-btn mute", textContent: "M", title: `Mute the ${d.label.toLowerCase()}` });
-      const row = el("div", { className: "drum-track" }, el("div", { className: "drum-label" }, name, muteDrum), pattern, sound);
+      // The mode as a segmented switch; it's a .param row so MIDI learn can map it.
+      const modeSpec = specsOf(d.label).find((p) => p.key === `${d.key}Mode`)!;
+      const seg = el("div", { className: "param drum-mode", title: modeSpec.description ?? "" });
+      seg.dataset.target = `gen:${d.key}Mode`;
+      for (const m of DRUM_MODES) {
+        const b = el("button", { type: "button", className: "small", textContent: m.label });
+        b.dataset.mode = m.value;
+        b.addEventListener("click", () => {
+          values[`${d.key}Mode`] = m.value;
+          changed(modeSpec);
+          this.selectDrum(d.key);
+          b.blur();
+        });
+        seg.append(b);
+      }
+      const row = el("div", { className: "drum-voice-row" }, el("div", { className: "drum-label" }, name, muteDrum), seg);
+      row.dataset.voice = d.key;
+      row.addEventListener("pointerdown", (e) => {
+        if (!(e.target as HTMLElement).closest(".mute")) this.selectDrum(d.key);
+      });
       const showDrum = () => {
         muteDrum.classList.toggle("active", !seq[onKey]);
         row.classList.toggle("off", !seq[onKey]);
@@ -1121,14 +1141,28 @@ export class Studio {
         muteDrum.blur();
       });
       showDrum();
-      tracks.append(row);
-      render(pattern, patternOf(d.label));
-      render(sound, soundOf(d.label));
+      list.append(row);
+
+      // This voice's panel: a column per kind of control, the pattern ones shown by mode.
+      const col = (cls: string, label: string, specs: ParamSpec[], sliders = "part-sliders") => {
+        const box = el("div", { className: sliders });
+        const c = el("div", { className: `track-col ${cls}` }, el("span", { className: "section-label", textContent: label }), box);
+        render(box, specs);
+        return c;
+      };
+      const euclidCol = col("voice-euclid", "Euclidean", ofKey(d.label, [`${d.key}Density`, `${d.key}Rotate`]));
+      const gridsCol = col("voice-grids", "Grids", ofKey(d.label, [`${d.key}Fill`]));
+      gridsCol.querySelector(".section-label")!.after(el("div", { className: "grids-slot" }));
+      const patternCol = col("voice-pattern", "Pattern", ofKey(d.label, [`${d.key}Variation`, `${d.key}Length`, `${d.key}Reset`]));
+      const soundCol = col("voice-sound", "Sound", soundOf(d.label), "part-sliders cols-2");
+      const panel = el("div", { className: "track-cols drum-panel" }, euclidCol, gridsCol, patternCol, soundCol);
+      panel.dataset.voice = d.key;
+      panels.append(panel);
     }
     this.buildRing();
     render($("grids-controls"), specsOf("Drum map"));
     this.buildGridsPad();
-    this.showDrumModes();
+    this.selectDrum(s.drumVoice);
 
     render($("bass-controls"), patternOf("Bass"));
     render($("bass-sound"), soundOf("Bass"));
@@ -1252,20 +1286,35 @@ export class Studio {
   /** What the pad last drew, so it only redraws when the map position or modes change. */
   private padDrawn = "";
 
-  /** Dim the controls a drum's mode doesn't use, and the drum map when no drum reads it. */
+  /** Show each voice's mode, and in the open voice's panel only the controls its mode uses. */
   private showDrumModes(): void {
     const seq = this.settings.seq;
-    let anyMap = false;
     for (const d of DRUMS) {
       const mode = seq[`${d.key}Mode`];
-      if (mode !== "euclid") anyMap = true;
-      document.querySelector(`.param[data-target="gen:${d.key}Density"]`)?.classList.toggle("unused", mode === "grids");
-      document.querySelector(`.param[data-target="gen:${d.key}Fill"]`)?.classList.toggle("unused", mode === "euclid");
-      document.querySelector(`.param[data-target="gen:${d.key}Rotate"]`)?.classList.toggle("unused", mode === "grids");
+      for (const b of document.querySelectorAll<HTMLElement>(`.drum-mode[data-target="gen:${d.key}Mode"] button`)) {
+        b.classList.toggle("active", b.dataset.mode === mode);
+      }
+      const panel = document.querySelector<HTMLElement>(`.drum-panel[data-voice="${d.key}"]`);
+      if (!panel) continue;
+      panel.querySelector<HTMLElement>(".voice-euclid")!.hidden = mode === "grids";
+      panel.querySelector<HTMLElement>(".voice-grids")!.hidden = mode === "euclid";
     }
-    $("grids-map").classList.toggle("unused", !anyMap);
+    // The drum map is shared by every voice, so it moves into whichever panel is open.
+    const open = document.querySelector<HTMLElement>(`.drum-panel[data-voice="${this.settings.drumVoice}"] .grids-slot`);
+    if (open && $("grids-map").parentElement !== open) open.append($("grids-map"));
     this.padDrawn = "";
     this.drawGridsPad();
+  }
+
+  /** Open a drum voice's controls. */
+  private selectDrum(key: DrumKey): void {
+    for (const row of document.querySelectorAll<HTMLElement>(".drum-voice-row")) row.classList.toggle("selected", row.dataset.voice === key);
+    for (const panel of document.querySelectorAll<HTMLElement>(".drum-panel")) panel.hidden = panel.dataset.voice !== key;
+    if (this.settings.drumVoice !== key) {
+      this.settings.drumVoice = key;
+      this.saveGlobal();
+    }
+    this.showDrumModes();
   }
 
   /** The drum map as an X/Y pad: drag the dot to move round it, double-click for the style's spot. */
@@ -1366,6 +1415,7 @@ export class Studio {
     ring.addEventListener("pointerdown", (e) => {
       const { track, angle } = at(e);
       const key = DRUMS[track].key;
+      this.selectDrum(key);
       drag = { key, angle, rotate: this.seq.rotation(key) };
       ring.setPointerCapture(e.pointerId);
     });

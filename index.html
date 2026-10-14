@@ -114,15 +114,16 @@
                 <div class="track-body" data-track="drums">
                   <header class="part-head"><span class="part-title">Drums</span><span class="part-tools"><button type="button" id="hold-drums" class="small hold" title="Freeze this track so it stops evolving; the others keep changing">Hold</button></span></header>
                   <div class="drums-body">
-                    <div class="drums-left">
-                      <canvas id="drum-ring" title="Drag a ring round to turn its pattern. Double-click to put it back where the style starts it."></canvas>
-                      <div id="grids-map" title="The Grids drum map, for drums set to Grids or Both. Drag round it: straight to broken left to right, sparse to busy bottom to top. Double-click for the style's spot.">
-                        <div class="grids-head"><span class="section-label">Drum map</span><span id="grids-name" class="muted"></span></div>
+                    <canvas id="drum-ring" title="Click a ring to edit its drum. Drag it round to turn its euclidean hits; double-click to put them back where the style starts them."></canvas>
+                    <div id="drum-voices"></div>
+                    <div id="drum-voice"></div>
+                    <div hidden>
+                      <div id="grids-map" title="The Grids drum map, shared by every drum on Grids or Both. Drag round it: straight to broken left to right, sparse to busy bottom to top. Double-click for the style's spot.">
+                        <div class="grids-head"><span id="grids-name" class="muted"></span></div>
                         <canvas id="grids-pad"></canvas>
                         <div id="grids-controls" class="part-sliders"></div>
                       </div>
                     </div>
-                    <div id="drum-tracks"></div>
                   </div>
                 </div>
                 <div class="track-body" data-track="bass" hidden>
