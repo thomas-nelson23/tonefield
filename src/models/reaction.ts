@@ -1,5 +1,5 @@
 import { type Gfx } from "../gl/gfx";
-import { NOMINAL_DT, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
+import { NOMINAL_DT, curveFor, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { noteHash } from "./lib/music";
 import { Raster, hsl, palette } from "./lib/raster";
 import { Feedback, applyFeedback, colourParam, feedbackParams, hueToward } from "./lib/visual";
@@ -411,33 +411,8 @@ export const reaction: ModelDefinition = {
   fixedDt: 1 / 60,
   paintsBackground: true,
   params: [
-    { kind: "number", key: "spectrumGrowth", label: "Spectrum growth", min: 0, max: 2, step: 0.05, default: 0.6, group: "Music", global: "energy",
-      description: "How much loud frequencies make their part of the screen grow. High values paint a living spectrogram." },
-    { kind: "number", key: "bloom", label: "Bass bloom", min: 0, max: 2, step: 0.05, default: 0.7, group: "Music",
-      description: "A soft glow over the ink that swells with the bass." },
-    { kind: "number", key: "feedShift", label: "Feed shift", min: -0.02, max: 0.02, step: 0.0005, default: 0, group: "Behaviour",
-      description: "Nudges how fast fresh chemical is fed in. Up floods with growth, down starves it." },
-    { kind: "number", key: "killShift", label: "Kill shift", min: -0.008, max: 0.008, step: 0.0002, default: 0, group: "Behaviour",
-      description: "Nudges how fast the pattern dies off. Down spreads blobs, up erodes into dots." },
-    { kind: "number", key: "diffusion", label: "Pattern scale", min: 0.2, max: 1.05, step: 0.01, default: 1, group: "Behaviour",
-      description: "How far the chemicals spread. Lower makes finer, tighter patterns." },
-    { kind: "number", key: "speed", label: "Growth speed", min: 1, max: 32, step: 1, default: 10, group: "Behaviour",
-      description: "How many reaction steps run each frame, i.e. how fast patterns grow." },
-    colourParam(),
-    ...feedbackParams(0),
-    gravityModeParam("off"),
-    { kind: "number", key: "fieldGravity", label: "Flow speed", min: 0, max: 400, step: 5, default: 60, global: "gravity", hidden: true,
-      description: "How fast the ink flows, pixels per second." },
-    { kind: "boolean", key: "sharp", label: "Sharp edges", default: true, group: "Look",
-      description: "Smooths the chemistry up to screen resolution before colouring it, so edges are crisp instead of blurry. Turn off for a few more frames per second on very big screens." },
-    // How sharply the pattern's edges stand out. The global Contrast covers it; macros still push it.
-    { kind: "number", key: "contrast", label: "Contrast", min: 0.4, max: 5, step: 0.05, default: 1.6, hidden: true },
-    { kind: "number", key: "brush", label: "Brush size", min: 4, max: 150, step: 1, default: 14, group: "Brush",
-      description: "Size of the area you seed or wipe when dragging." },
-    { kind: "number", key: "brushHold", label: "Brush hold", min: 0, max: 120, step: 1, default: 40, group: "Brush",
-      description: "How many seconds what you draw keeps being fed, so lines you draw to join shapes stay joined. All the way up keeps them fed for good; zero lets the chemistry take them over at once." },
     {
-      kind: "choice", key: "pattern", label: "Pattern", default: "coral", resetOnChange: true, group: "Setup",
+      kind: "choice", key: "pattern", label: "Pattern", default: "coral", resetOnChange: true,
       description: "Which feed and kill rates to start from. Each grows a different family of shapes.",
       options: [
         { value: "coral", label: "Coral" },
@@ -449,8 +424,37 @@ export const reaction: ModelDefinition = {
         { value: "map", label: "Map of every pattern" },
       ],
     },
-    { kind: "number", key: "cellSize", label: "Cell size", min: 2, max: 8, step: 1, default: 4, resetOnChange: true, group: "Setup",
+    { kind: "widget", widget: "pad", key: "chemistry", label: "Chemistry", keys: ["feedShift", "killShift"],
+      description: "Drag to explore the chemistry: left to right feeds in more fresh chemical (floods with growth), bottom to top kills it off faster (erodes into dots). The cross marks the pattern's own spot." },
+    { kind: "number", key: "diffusion", label: "Pattern scale", min: 0.2, max: 1.05, step: 0.01, default: 1, random: [0.4, 1.05],
+      description: "How far the chemicals spread. Lower makes finer, tighter patterns." },
+    { kind: "number", key: "speed", label: "Growth", min: 1, max: 32, step: 1, default: 10, perf: true, random: [3, 20],
+      description: "How many reaction steps run each frame, i.e. how fast patterns grow. The one slider here that costs frame rate." },
+    { kind: "number", key: "brush", label: "Brush size", min: 4, max: 150, step: 1, default: 14, curve: curveFor(4, 150, 14), random: [6, 60],
+      description: "Size of the area you seed or wipe when dragging." },
+    { kind: "number", key: "feedShift", label: "Feed shift", min: -0.02, max: 0.02, step: 0.0005, default: 0, advanced: true, snapZero: true,
+      format: (v) => `${v > 0 ? "+" : ""}${Math.round((v / 0.02) * 100)}%`,
+      description: "Nudges how fast fresh chemical is fed in. Up floods with growth, down starves it. The pad above moves it too." },
+    { kind: "number", key: "killShift", label: "Kill shift", min: -0.008, max: 0.008, step: 0.0002, default: 0, advanced: true, snapZero: true,
+      format: (v) => `${v > 0 ? "+" : ""}${Math.round((v / 0.008) * 100)}%`,
+      description: "Nudges how fast the pattern dies off. Down spreads blobs, up erodes into dots. The pad above moves it too." },
+    { kind: "number", key: "brushHold", label: "Brush hold", min: 0, max: 120, step: 1, default: 40, advanced: true,
+      format: (v) => (v >= 120 ? "for good" : `${v} s`),
+      description: "How many seconds what you draw keeps being fed, so lines you draw to join shapes stay joined. All the way up keeps them fed for good; zero lets the chemistry take them over at once." },
+    { kind: "boolean", key: "sharp", label: "Sharp edges", default: true, advanced: true,
+      description: "Smooths the chemistry up to screen resolution before colouring it, so edges are crisp instead of blurry. Turn off for a few more frames per second on very big screens." },
+    { kind: "number", key: "cellSize", label: "Cell size", min: 2, max: 8, step: 1, default: 4, resetOnChange: true, perf: true, advanced: true,
       description: "Pixels per simulation cell. Smaller is sharper but slower. Restarts the pattern." },
+    // Set by the matrix rows Spectrum growth and Bass bloom.
+    { kind: "number", key: "spectrumGrowth", label: "Spectrum growth", min: 0, max: 2, step: 0.05, default: 0.6, hidden: true },
+    { kind: "number", key: "bloom", label: "Bass bloom", min: 0, max: 2, step: 0.05, default: 0.7, hidden: true },
+    colourParam(),
+    ...feedbackParams(0),
+    gravityModeParam("off"),
+    { kind: "number", key: "fieldGravity", label: "Flow speed", min: 0, max: 400, step: 5, default: 60, global: "gravity", hidden: true,
+      description: "How fast the ink flows, pixels per second." },
+    // How sharply the pattern's edges stand out. The global Contrast covers it; macros still push it.
+    { kind: "number", key: "contrast", label: "Contrast", min: 0.4, max: 5, step: 0.05, default: 1.6, hidden: true },
   ],
   macros: [
     { key: "grow", label: "Overgrowth", description: "Floods the screen with fast, sharp, hungry growth.",
@@ -475,8 +479,8 @@ export const reaction: ModelDefinition = {
     { source: "hat", label: "Tiny seeds", text: "Sprinkles tiny seeds" },
     { source: "bassline", label: "Seed low down", text: "Seeds growth low down, placed by pitch" },
     { source: "chord", label: "Chord wheel", text: "Seeds one blob per chord note round a circle, like a colour wheel" },
-    { source: "spectrum", label: "Spectrum growth", text: "Loud frequencies make their column grow (Spectrum growth)" },
-    { source: "bass", label: "Bass bloom", text: "A glow over the ink swells (Bass bloom)" },
+    { source: "spectrum", label: "Spectrum growth", text: "Loud frequencies make their column grow. The strength is how much", param: "spectrumGrowth" },
+    { source: "bass", label: "Bass bloom", text: "A glow over the ink swells with the bass. The strength is how bright", param: "bloom" },
   ],
   create: () => new ReactionSim(),
 };

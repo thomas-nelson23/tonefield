@@ -1,5 +1,5 @@
 import { hsla, rgba, type Gfx } from "../gl/gfx";
-import { jitterScale, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
+import { curveFor, jitterScale, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { noteHash, noteHue } from "./lib/music";
 import { Feedback, applyFeedback, colourParam, feedbackParams, schemeHue } from "./lib/visual";
 import { gravityTo, gravityModeParam, isUniform } from "./lib/gravity";
@@ -66,6 +66,12 @@ class BoidsSim implements SimulationModel {
     // Outside "follow the melody", the scheme slowly tints the flock by position.
     const tint = scheme === "notes" ? 0 : dt * 0.6;
     const radius = p.radius as number;
+    // One Flocking slider scales the three flocking forces together: tight packs birds (cohesion and
+    // alignment up, separation down), loose does the opposite; the raw sliders under More trim each.
+    const flock = (p.flocking as number) - 0.5;
+    const alignment = (p.alignment as number) * Math.pow(2.5, 2 * flock);
+    const cohesion = (p.cohesion as number) * Math.pow(3, 2 * flock);
+    const separation = (p.separation as number) * Math.pow(3, -2 * flock);
     const r2 = radius * radius;
     const sepR2 = (radius * 0.4) ** 2;
     const maxSpeed = p.maxSpeed as number;
@@ -132,12 +138,12 @@ class BoidsSim implements SimulationModel {
       }
       let fx = 0, fy = 0;
       if (n > 0) {
-        fx += (ax / n - b.vx) * (p.alignment as number);
-        fy += (ay / n - b.vy) * (p.alignment as number);
-        fx += (cx / n - b.x) * (p.cohesion as number);
-        fy += (cy / n - b.y) * (p.cohesion as number);
-        fx += sx * (p.separation as number) * 1000;
-        fy += sy * (p.separation as number) * 1000;
+        fx += (ax / n - b.vx) * alignment;
+        fy += (ay / n - b.vy) * alignment;
+        fx += (cx / n - b.x) * cohesion;
+        fy += (cy / n - b.y) * cohesion;
+        fx += sx * separation * 1000;
+        fy += sy * separation * 1000;
         // Colour spreads from neighbour to neighbour.
         const k = Math.min(1, spread * dt);
         b.hx += (hx / n - b.hx) * k;
@@ -321,37 +327,39 @@ export const boids: ModelDefinition = {
   fixedDt: 1 / 60,
   paintsBackground: true,
   params: [
-    { kind: "number", key: "separation", label: "Separation", min: 0, max: 15, step: 0.1, default: 1.5, group: "Behaviour",
-      description: "How hard birds avoid crowding. High values spread the flock into a lattice." },
-    { kind: "number", key: "alignment", label: "Alignment", min: 0, max: 10, step: 0.1, default: 1.2, group: "Behaviour",
-      description: "How much birds match their neighbours' heading. High values form rivers of light." },
-    { kind: "number", key: "cohesion", label: "Cohesion", min: 0, max: 15, step: 0.1, default: 0.8, group: "Behaviour",
-      description: "How strongly birds steer to the middle of their group. High values make tight balls." },
-    { kind: "number", key: "radius", label: "Vision radius", min: 5, max: 200, step: 1, default: 40, group: "Behaviour",
-      description: "How far each bird can see. Small makes many little groups, large one big flock." },
-    { kind: "number", key: "maxSpeed", label: "Max speed", min: 20, max: 900, step: 5, default: 160, group: "Motion", global: "energy",
+    { kind: "number", key: "flocking", label: "Flocking", min: 0, max: 1, step: 0.01, default: 0.5, random: [0.1, 0.9],
+      format: (v) => (v < 0.2 ? "loose" : v < 0.4 ? "airy" : v < 0.6 ? "natural" : v < 0.8 ? "close" : "tight"),
+      description: "Loose lets the birds fray apart; tight packs them into rivers and balls. It moves Separation, Alignment and Cohesion together." },
+    { kind: "number", key: "maxSpeed", label: "Speed", min: 20, max: 900, step: 5, default: 160, curve: curveFor(20, 900, 160), random: [60, 400], global: "energy",
       description: "Top speed. Birds never drop below about a third of it." },
-    { kind: "number", key: "wander", label: "Wander", min: 0, max: 1500, step: 10, default: 0, group: "Motion", global: "energy",
-      description: "Random steering that makes the flock jitter and fray apart." },
-    { kind: "number", key: "lure", label: "Note pull", min: 0, max: 5, step: 0.1, default: 1.2, group: "Music",
-      description: "How strongly the flock chases each melody note." },
-    { kind: "number", key: "home", label: "Centre pull", min: 0, max: 5, step: 0.05, default: 0.6, group: "Motion",
+    { kind: "number", key: "radius", label: "Group size", min: 5, max: 200, step: 1, default: 40, curve: curveFor(5, 200, 40), random: [15, 120],
+      description: "How far each bird can see. Small makes many little groups, large one big flock." },
+    { kind: "number", key: "home", label: "Stay centred", min: 0, max: 2, step: 0.05, default: 0.6, random: [0, 1.5],
       description: "How strongly the flock is drawn back to the middle of the screen. Zero lets it roam and wrap round the edges." },
-    { kind: "number", key: "scatter", label: "Kick scatter", min: 0, max: 800, step: 10, default: 180, group: "Music", global: "energy",
-      description: "How hard a kick drum blasts the flock outward from the centre." },
-    { kind: "number", key: "colourSpread", label: "Colour spread", min: 0, max: 10, step: 0.1, default: 1.5, group: "Music",
+    { kind: "number", key: "streak", label: "Streak length", min: 0, max: 6, step: 0.05, default: 1.2, random: [0.3, 3],
+      description: "How long a streak each bird draws behind it. The bass stretches it further." },
+    { kind: "number", key: "count", label: "Birds", min: 10, max: 4000, step: 10, default: 900, resetOnChange: true, perf: true,
+      description: "How many birds. Rebuilds the flock." },
+    { kind: "number", key: "separation", label: "Separation", min: 0, max: 5, step: 0.1, default: 1.5, advanced: true, random: [0.5, 4],
+      description: "How hard birds avoid crowding. High values spread the flock into a lattice." },
+    { kind: "number", key: "alignment", label: "Alignment", min: 0, max: 4, step: 0.1, default: 1.2, advanced: true, random: [0.3, 3],
+      description: "How much birds match their neighbours' heading. High values form rivers of light." },
+    { kind: "number", key: "cohesion", label: "Cohesion", min: 0, max: 4, step: 0.1, default: 0.8, advanced: true, random: [0.2, 3],
+      description: "How strongly birds steer to the middle of their group. High values make tight balls." },
+    { kind: "number", key: "wander", label: "Wander", min: 0, max: 400, step: 5, default: 0, curve: 2, advanced: true, random: [0, 300], global: "energy",
+      description: "Random steering that makes the flock jitter and fray apart." },
+    { kind: "number", key: "size", label: "Line width", min: 0.4, max: 5, step: 0.1, default: 1, advanced: true, random: [0.6, 2.5],
+      description: "How thick each streak is." },
+    { kind: "number", key: "colourSpread", label: "Colour spread", min: 0, max: 10, step: 0.1, default: 1.5, advanced: true, random: [0, 5],
       description: "How fast a note's colour passes from bird to bird. Zero keeps each bird the colour it was given." },
+    // Set by the matrix rows Chase the note and Burst outward.
+    { kind: "number", key: "lure", label: "Note pull", min: 0, max: 5, step: 0.1, default: 1.2, hidden: true },
+    { kind: "number", key: "scatter", label: "Kick scatter", min: 0, max: 800, step: 10, default: 180, hidden: true },
     gravityModeParam("off"),
     { kind: "number", key: "fieldGravity", label: "Field strength", min: 0, max: 1500, step: 10, default: 300, global: "gravity", hidden: true,
       description: "How hard the gravity field pulls the birds. Strong fields overpower the flocking." },
     colourParam(),
-    { kind: "number", key: "streak", label: "Streak length", min: 0, max: 6, step: 0.05, default: 1.2, group: "Look",
-      description: "How long a streak each bird draws behind it. The bass stretches it further." },
-    { kind: "number", key: "size", label: "Line width", min: 0.4, max: 5, step: 0.1, default: 1, group: "Look",
-      description: "How thick each streak is." },
     ...feedbackParams(0.8),
-    { kind: "number", key: "count", label: "Birds", min: 10, max: 4000, step: 10, default: 900, resetOnChange: true, group: "Setup",
-      description: "How many birds. Rebuilds the flock." },
   ],
   macros: [
     { key: "swarm", label: "Swarm", description: "Packs the whole flock into one dense, pulsing ball.",
@@ -370,8 +378,8 @@ export const boids: ModelDefinition = {
     { source: "treble", target: "size", amount: 0.2 },
   ],
   reactions: [
-    { source: "tone", label: "Chase the note", text: "The flock chases the note, placed by pitch, and nearby birds take its colour" },
-    { source: "kick", label: "Burst outward", text: "Blasts the flock outward from the centre and flashes it" },
+    { source: "tone", label: "Chase the note", text: "The flock chases the note, placed by pitch, and nearby birds take its colour. The strength is how hard it pulls", param: "lure" },
+    { source: "kick", label: "Burst outward", text: "Blasts the flock outward from the centre and flashes it. The strength is how hard", param: "scatter" },
     { source: "snare", label: "Vortex", text: "Spins a vortex through the flock, alternating direction" },
     { source: "hat", label: "Sparkling birds", text: "A sprinkling of birds sparkle" },
     { source: "bassline", label: "Low lure", text: "A low lure along the bottom, placed by pitch, drags the flock down" },

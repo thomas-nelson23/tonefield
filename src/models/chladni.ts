@@ -1,5 +1,5 @@
 import { type Gfx } from "../gl/gfx";
-import { jitterScale, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
+import { curveFor, jitterScale, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { Feedback, applyFeedback, colourParam, feedbackParams, hueToward, schemeHue } from "./lib/visual";
 import { gravityTo, gravityModeParam, isUniform } from "./lib/gravity";
 import { Raster, hsl, rgb } from "./lib/raster";
@@ -26,6 +26,13 @@ SQUARE.sort((a, b) => a[0] ** 2 + a[1] ** 2 - (b[0] ** 2 + b[1] ** 2));
 const ROUND: [number, number, number][] = [];
 for (let n = 2; n <= 14; n++) for (let m = 1; m <= 5; m++) ROUND.push([n, m, 0]);
 ROUND.sort((a, b) => a[0] + a[1] * 3 - (b[0] + b[1] * 3));
+
+/** What the Figure slider's readout says: the mode's spokes and rings, or its Chladni numbers. */
+function figureName(round: boolean, index: number): string {
+  const list = round ? ROUND : SQUARE;
+  const [n, m, sign] = list[Math.max(0, Math.min(list.length - 1, Math.round(index)))];
+  return round ? `${n}·${m}` : `${n},${m}${sign < 0 ? "−" : "+"}`;
+}
 
 /**
  * Cosine by table: the sand loop evaluates eight trig functions per grain per
@@ -418,51 +425,53 @@ export const chladni: ModelDefinition = {
   name: "Cymatics",
   category: "Surfaces",
   description: "Glowing sand on a vibrating plate gathers on the lines that stay still. Every melody note rings a new mode and the sand morphs into its figure, higher notes drawing busier ones; the round plate draws turning mandalas. Drums and loud passages shake the sand loose.",
-  hint: "Play notes (sequencer or MIDI) to change the figure, or use the Mode slider. Drag to stir the sand.",
+  hint: "Play notes (sequencer or MIDI) to change the figure, or use the Figure slider. Drag to stir the sand.",
   fixedDt: 1 / 60,
   paintsBackground: true,
   params: [
     {
-      kind: "choice", key: "plate", label: "Plate", default: "round", group: "Shape",
+      kind: "choice", key: "plate", label: "Plate", default: "round", segmented: true,
       description: "A round plate draws mandalas of spokes and rings; a square one draws classic Chladni figures.",
       options: [
-        { value: "round", label: "Round (mandalas)" },
-        { value: "square", label: "Square (Chladni figures)" },
+        { value: "round", label: "Round" },
+        { value: "square", label: "Square" },
       ],
     },
+    { kind: "number", key: "mode", label: "Figure", min: 0, max: SQUARE.length - 1, step: 1, default: 6, random: [0, 30],
+      format: (v, p) => figureName((p?.plate ?? "round") === "round", v),
+      description: "Which vibration pattern the plate rings in; higher figures are busier. The readout is spokes·rings on the round plate and the two Chladni numbers on the square one. Moving it rings that figure, and every melody note then rings a new one." },
+    { kind: "number", key: "turn", label: "Turning", min: -120, max: 120, step: 1, default: 6, snapZero: true, random: [-40, 40],
+      showWhen: (p) => p.plate === "round",
+      description: "How fast the round plate's pattern turns, degrees per second. Speeds up when the music is loud." },
+    { kind: "number", key: "vibration", label: "Vibration", min: 0, max: 4, step: 0.05, default: 1, curve: curveFor(0, 4, 1), random: [0.2, 2.5], global: "energy",
+      description: "How hard the plate shakes all the time. High values blow the sand into a churning haze." },
+    { kind: "number", key: "settle", label: "Sharpness", min: 0, max: 5, step: 0.05, default: 1.6, curve: curveFor(0, 5, 1.6), random: [0.5, 4],
+      description: "How fast sand slides onto the still lines. High values snap each figure sharp." },
     {
-      kind: "choice", key: "plateSize", label: "Plate size", default: "fill", group: "Shape",
+      kind: "choice", key: "plateSize", label: "Plate size", default: "fill", advanced: true,
       description: "Fill the screen carries the figure out to every edge, so sand can spread all the way out; Centred keeps it on a plate in the middle.",
       options: [
         { value: "fill", label: "Fill the screen" },
         { value: "centred", label: "Centred plate" },
       ],
     },
-    { kind: "number", key: "mode", label: "Mode", min: 0, max: SQUARE.length - 1, step: 1, default: 6, group: "Shape",
-      description: "Which vibration pattern the plate rings in. Higher modes draw busier figures." },
-    { kind: "number", key: "turn", label: "Turning", min: -120, max: 120, step: 1, default: 6, group: "Shape",
-      description: "How fast the round plate's pattern turns, degrees per second. Speeds up when the music is loud." },
-    { kind: "number", key: "punch", label: "Hit shake", min: 0, max: 4, step: 0.05, default: 1, group: "Music", global: "energy",
-      description: "How hard drums and notes shake the sand off the lines." },
-    { kind: "number", key: "loudShake", label: "Loudness shake", min: 0, max: 6, step: 0.1, default: 1.5, group: "Music", global: "energy",
-      description: "How much loud music keeps the sand churning between hits." },
-    { kind: "number", key: "vibration", label: "Vibration", min: 0, max: 12, step: 0.05, default: 1, group: "Behaviour", global: "energy",
-      description: "How hard the plate shakes all the time. High values blow the sand into a churning haze." },
-    { kind: "number", key: "settle", label: "Settling speed", min: 0, max: 12, step: 0.05, default: 1.6, group: "Behaviour",
-      description: "How fast sand slides onto the still lines. High values snap each figure sharp." },
+    { kind: "boolean", key: "endlessFlow", label: "Endless flow", default: true, advanced: true,
+      description: "Sand that gravity pours off the edge comes back in, so it keeps streaming through the figure. Off: it heaps up along the edge." },
+    { kind: "number", key: "secondHue", label: "Second colour", min: 0, max: 360, step: 5, default: 160, advanced: true,
+      format: (v) => `${v}°`,
+      description: "How far round the colour wheel the bouncing sand is from the settled sand." },
+    { kind: "number", key: "grainSize", label: "Grain size", min: 0.5, max: 5, step: 0.1, default: 1.8, advanced: true, random: [0.8, 3.5],
+      description: "How big each grain is drawn. Treble makes them sparkle bigger." },
+    { kind: "number", key: "grains", label: "Grains", min: 2000, max: 80000, step: 1000, default: 24000, resetOnChange: true, perf: true, advanced: true,
+      description: "How many grains of sand are on the plate. More grains draw finer lines; a full-screen plate on a wide monitor wants more." },
+    // Set by the matrix row Churn and spin; Hit shake stays at its default, since each hit's row now sets how hard it shakes.
+    { kind: "number", key: "loudShake", label: "Loudness shake", min: 0, max: 6, step: 0.1, default: 1.5, hidden: true },
+    { kind: "number", key: "punch", label: "Hit shake", min: 0, max: 4, step: 0.05, default: 1, hidden: true },
     gravityModeParam("off"),
     { kind: "number", key: "fieldGravity", label: "Tilt", min: 0, max: 1.5, step: 0.01, default: 0.25, global: "gravity", hidden: true,
       description: "How steeply the plate tilts. High values pour the sand off the figure into a heap." },
-    { kind: "boolean", key: "endlessFlow", label: "Endless flow", default: true, group: "Gravity",
-      description: "Sand that gravity pours off the edge comes back in, so it keeps streaming through the figure. Off: it heaps up along the edge." },
     colourParam(),
-    { kind: "number", key: "secondHue", label: "Second colour", min: 0, max: 360, step: 5, default: 160, group: "Look",
-      description: "How far round the colour wheel the bouncing sand is from the settled sand." },
-    { kind: "number", key: "grainSize", label: "Grain size", min: 0.5, max: 5, step: 0.1, default: 1.8, group: "Look",
-      description: "How big each grain is drawn. Treble makes them sparkle bigger." },
     ...feedbackParams(0.7),
-    { kind: "number", key: "grains", label: "Grains", min: 2000, max: 80000, step: 1000, default: 24000, resetOnChange: true, group: "Setup",
-      description: "How many grains of sand are on the plate. More grains draw finer lines; a full-screen plate on a wide monitor wants more." },
   ],
   macros: [
     { key: "agitate", label: "Agitate", description: "Shakes the plate so hard the figure boils into a glittering haze.",
@@ -486,7 +495,7 @@ export const chladni: ModelDefinition = {
     { source: "hat", label: "Light shiver", text: "A light shiver" },
     { source: "bassline", label: "Soft thump", text: "A soft thump that loosens the sand" },
     { source: "chord", label: "Chord figure", text: "Each chord rings its own figure, set by its root" },
-    { source: "level", label: "Churn and spin", text: "Loud music keeps the sand churning and turns the round plate faster" },
+    { source: "level", label: "Churn and spin", text: "Loud music keeps the sand churning and turns the round plate faster. The strength is how much", param: "loudShake" },
     { source: "treble", label: "Bigger grains", text: "Grains sparkle bigger" },
   ],
   create: () => new CymaticsSim(),

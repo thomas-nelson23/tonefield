@@ -7,6 +7,8 @@ export interface ParamControls {
   showModulation(effective: Record<string, number | boolean | string>): void;
   /** Name the routes pushing each parameter, e.g. "Kick +40%", under its control. */
   showRoutes(labels: Record<string, string>): void;
+  /** Show or hide the one-line descriptions under the controls. */
+  setHelp(on: boolean): void;
 }
 
 /** Fill a slider's track up to its thumb (the CSS reads `--fill`). */
@@ -40,15 +42,44 @@ export interface ParamLocks {
   changed(): void;
 }
 
+/** Extras a panel can ask for. */
+export interface ControlOptions {
+  locks?: ParamLocks;
+  /** Each slider gets a ♪ button that asks for a modulation route to it. */
+  addRoute?(key: string): void;
+  /** Clicking the ♪ badge under a slider shows the routes pushing it. */
+  showRouteOf?(key: string): void;
+  /** Start with the descriptions shown under the controls. */
+  help?: boolean;
+}
+
+type NumberSpec = Extract<ParamSpec, { kind: "number" }>;
+type ChoiceSpec = Extract<ParamSpec, { kind: "choice" }>;
+
 const LOCK_ICON =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.5" width="8" height="5.5" rx="1"/><path class="shackle" d="M4 5.5V4a2 2 0 0 1 4 0v1.5"/></svg>';
+const ROUTE_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 9.5V2.5l5-1v7"/><circle cx="3" cy="9.5" r="1.6"/><circle cx="8" cy="8.5" r="1.6"/></svg>';
+
+/** The slider position (0..1) of a value on a curved slider, and back. */
+function toPos(spec: NumberSpec, v: number): number {
+  const frac = Math.min(1, Math.max(0, (v - spec.min) / (spec.max - spec.min)));
+  return spec.curve && spec.curve !== 1 ? Math.pow(frac, 1 / spec.curve) : frac;
+}
+function fromPos(spec: NumberSpec, pos: number): number {
+  const frac = spec.curve && spec.curve !== 1 ? Math.pow(pos, spec.curve) : pos;
+  const raw = spec.min + frac * (spec.max - spec.min);
+  const snapped = spec.min + Math.round((raw - spec.min) / spec.step) * spec.step;
+  return Number(Math.min(spec.max, Math.max(spec.min, snapped)).toFixed(6));
+}
 
 /**
- * Builds sliders, checkboxes and dropdowns from a model's parameter specs. `onChange`
- * receives the spec that changed so the host can decide whether to reset.
- * Each row carries `data-target` (`targetPrefix` + key) so MIDI learn can find it.
- * Specs marked `hidden` get no control. With `locks`, each row gets a padlock
- * that keeps the parameter out of Randomize.
+ * Builds sliders, checkboxes, dropdowns, segmented buttons and widgets from a
+ * model's parameter specs. `onChange` receives the spec that changed so the
+ * host can decide whether to reset. Each row carries `data-target`
+ * (`targetPrefix` + key) so MIDI learn can find it. Specs marked `hidden` get
+ * no control; `advanced` ones go under a folded "More" heading; `showWhen`
+ * ones appear only while their condition holds. With `locks`, each row gets
+ * a padlock that keeps the parameter out of Randomize.
  */
 export function renderParamControls(
   container: HTMLElement,
@@ -57,12 +88,21 @@ export function renderParamControls(
   onChange: (spec: ParamSpec) => void,
   targetPrefix = "",
   locks?: ParamLocks,
+  options: ControlOptions = {},
 ): ParamControls {
   container.replaceChildren();
+  container.classList.toggle("show-help", !!options.help);
   const refreshers: (() => void)[] = [];
   const badges: Record<string, HTMLElement> = {};
-  const sliders: { spec: Extract<ParamSpec, { kind: "number" }>; marker: HTMLElement; readout: HTMLElement; shown: boolean; drawn: string }[] = [];
-  // Parameters with a group go under a foldable heading, in the order groups first appear.
+  const sliders: { spec: NumberSpec; marker: HTMLElement; readout: HTMLElement; shown: boolean; drawn: string }[] = [];
+  const pads: { spec: Extract<ParamSpec, { kind: "widget" }>; draw(effective?: ParamValues): void }[] = [];
+  /** Rows that appear only in some states, and labels that change with them. */
+  const contextual: (() => void)[] = [];
+  /** Widgets drawn for a parameter, told when a slider moves it. */
+  const dependents: Record<string, (() => void)[]> = {};
+  const byKey = new Map(specs.map((s) => [s.key, s] as const));
+  // Parameters a widget stands for get no control of their own unless they are also fine ("advanced") controls.
+  const widgetKeys = new Set(specs.flatMap((s) => (s.kind === "widget" ? s.keys : [])));
   const groups = new Map<string, HTMLElement>();
   const collapsed = loadCollapsed();
   const parentFor = (group: string | undefined): HTMLElement => {
@@ -73,14 +113,17 @@ export function renderParamControls(
       details.className = "param-group";
       // Remembered per panel, so folding "Gravity" in the sidebar leaves the global one alone.
       const name = targetPrefix + group;
-      details.open = !collapsed.has(name);
+      details.open = !collapsed.has(name) && group !== "More";
+      if (group === "More" && collapsed.has("open:" + name)) details.open = true;
       const summary = document.createElement("summary");
       summary.textContent = group;
       body = document.createElement("div");
       details.append(summary, body);
       details.addEventListener("toggle", () => {
-        if (details.open) collapsed.delete(name);
-        else collapsed.add(name);
+        // "More" starts folded, so what is remembered is it being opened.
+        const flag = group === "More" ? "open:" + name : name;
+        if (details.open === (group === "More")) collapsed.add(flag);
+        else collapsed.delete(flag);
         saveCollapsed(collapsed);
       });
       container.append(details);
@@ -89,11 +132,119 @@ export function renderParamControls(
     return body;
   };
 
+  const updateContext = () => contextual.forEach((c) => c());
+  const notify = (key: string) => dependents[key]?.forEach((d) => d());
+  const changed = (spec: ParamSpec) => {
+    onChange(spec);
+    updateContext();
+  };
+
+  /** The small buttons before a label (padlock, ♪), in one cell so the label column stays aligned. */
+  const icons = (row: HTMLElement): HTMLElement => {
+    let box = row.querySelector<HTMLElement>(":scope > .param-icons");
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "param-icons";
+      row.prepend(box);
+    }
+    return box;
+  };
+
+  const makeLock = (row: HTMLElement, keys: string[]) => {
+    if (!locks) return;
+    const lockSet = locks;
+    row.classList.add("lockable");
+    const lock = document.createElement("button");
+    lock.type = "button";
+    lock.className = "lock";
+    lock.innerHTML = LOCK_ICON;
+    const show = () => {
+      const on = keys.every((k) => lockSet.keys.has(k));
+      lock.classList.toggle("on", on);
+      lock.setAttribute("aria-pressed", String(on));
+      lock.title = on ? "Locked: Randomize leaves this alone. Click to unlock." : "Lock, so Randomize leaves this alone";
+    };
+    show();
+    lock.addEventListener("click", () => {
+      const on = keys.every((k) => lockSet.keys.has(k));
+      for (const k of keys) {
+        if (on) lockSet.keys.delete(k);
+        else lockSet.keys.add(k);
+      }
+      show();
+      lockSet.changed();
+      lock.blur();
+    });
+    icons(row).append(lock);
+  };
+
+  const makeRouteButton = (row: HTMLElement, key: string) => {
+    const add = options.addRoute;
+    if (!add) return;
+    row.classList.add("routable");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "route-add";
+    b.innerHTML = ROUTE_ICON;
+    b.title = "Add a modulation route to this slider";
+    b.addEventListener("click", () => { add(key); b.blur(); });
+    icons(row).append(b);
+  };
+
+  const finishRow = (row: HTMLElement, spec: ParamSpec, keys: string[]) => {
+    makeLock(row, keys);
+    if (spec.kind === "number" && options.addRoute) makeRouteButton(row, spec.key);
+    if (spec.kind !== "widget") {
+      const badge = document.createElement("div");
+      badge.className = "mod-badge";
+      badge.hidden = true;
+      badges[spec.key] = badge;
+      if (options.showRouteOf) {
+        const show = options.showRouteOf;
+        badge.classList.add("clickable");
+        badge.title = "Show these routes in the Modulation tab";
+        badge.addEventListener("click", () => show(spec.key));
+      }
+      row.append(badge);
+    }
+    if (spec.description) {
+      row.title = spec.description;
+      const help = document.createElement("div");
+      help.className = "param-help";
+      help.textContent = spec.description;
+      row.append(help);
+    }
+    if (spec.showWhen) {
+      const when = spec.showWhen;
+      contextual.push(() => { row.hidden = !when(values); });
+    }
+    parentFor(spec.advanced ? "More" : spec.group).append(row);
+  };
+
+  /** Small tags after a label: "rebuilds" for parameters that restart the model, "fps" for costly ones. */
+  const tags = (spec: ParamSpec, label: HTMLElement) => {
+    if (spec.resetOnChange) {
+      const t = document.createElement("span");
+      t.className = "param-tag";
+      t.textContent = "↻";
+      t.title = spec.perf ? "Changing this rebuilds the model; higher values cost frame rate" : "Changing this rebuilds the model";
+      label.append(t);
+    }
+    if (spec.perf && !spec.resetOnChange) {
+      const t = document.createElement("span");
+      t.className = "param-tag perf";
+      t.textContent = "fps";
+      t.title = "Higher values cost frame rate";
+      label.append(t);
+    }
+  };
+
   for (const spec of specs) {
     if (spec.hidden) continue;
+    if (spec.kind !== "widget" && widgetKeys.has(spec.key) && !spec.advanced) continue;
     const row = document.createElement("div");
     row.className = "param";
-    row.dataset.target = targetPrefix + spec.key;
+    if (spec.kind !== "widget") row.dataset.target = targetPrefix + spec.key;
     const id = `param-${targetPrefix.replace(":", "-")}${spec.key}`;
 
     if (spec.kind === "number") {
@@ -101,32 +252,55 @@ export function renderParamControls(
       label.htmlFor = id;
       const name = document.createElement("span");
       name.textContent = spec.label;
+      tags(spec, name);
       const readout = document.createElement("span");
       readout.className = "readout";
       label.append(name, readout);
+      if (spec.labelFor) {
+        const labelFor = spec.labelFor;
+        contextual.push(() => { name.firstChild!.textContent = labelFor(values); });
+      }
 
       const input = document.createElement("input");
       input.type = "range";
       input.id = id;
-      input.min = String(spec.min);
-      input.max = String(spec.max);
-      input.step = String(spec.step);
-      input.value = String(values[spec.key]);
-
+      const curved = !!spec.curve && spec.curve !== 1;
+      if (curved) {
+        input.min = "0";
+        input.max = "1";
+        input.step = "0.001";
+      } else {
+        input.min = String(spec.min);
+        input.max = String(spec.max);
+        input.step = String(spec.step);
+      }
       const show = () => {
-        readout.textContent = spec.format ? spec.format(Number(input.value)) : formatNumber(Number(input.value), spec.step);
+        const v = values[spec.key] as number;
+        input.value = String(curved ? toPos(spec, v) : v);
+        readout.textContent = spec.format ? spec.format(v, values) : formatNumber(v, spec.step);
         paintRange(input);
+        row.classList.toggle("changed", Math.abs(v - spec.default) > 1e-9);
       };
       show();
       input.addEventListener("input", () => {
-        values[spec.key] = Number(input.value);
+        let v = curved ? fromPos(spec, Number(input.value)) : Number(input.value);
+        if (spec.snapZero && Math.abs(v) < (spec.max - spec.min) * 0.025) v = 0;
+        values[spec.key] = v;
         show();
-        if (!spec.resetOnChange) onChange(spec);
+        notify(spec.key);
+        if (!spec.resetOnChange) changed(spec);
       });
       // Resetting on every slider tick would be jarring for things like body
       // count, so reset-triggering params apply when the drag ends.
       input.addEventListener("change", () => {
-        if (spec.resetOnChange) onChange(spec);
+        if (spec.resetOnChange) changed(spec);
+      });
+      input.title = "Double-click to put it back to its default";
+      input.addEventListener("dblclick", () => {
+        values[spec.key] = spec.default;
+        show();
+        notify(spec.key);
+        changed(spec);
       });
       // A tick under the slider shows the value modulation is pushing it to.
       const track = document.createElement("div");
@@ -135,15 +309,47 @@ export function renderParamControls(
       marker.className = "mod-marker";
       track.append(marker);
       sliders.push({ spec, marker, readout, shown: false, drawn: "" });
-      refreshers.push(() => {
-        input.value = String(values[spec.key]);
-        show();
-      });
+      refreshers.push(show);
+      // A pad that moves this parameter tells the slider to follow.
+      (dependents[spec.key] ??= []).push(show);
       row.append(label, input, track);
+      finishRow(row, spec, [spec.key]);
+    } else if (spec.kind === "choice" && spec.segmented) {
+      row.classList.add("param-segmented");
+      const label = document.createElement("label");
+      label.textContent = spec.label;
+      const seg = document.createElement("div");
+      seg.className = "seg";
+      seg.id = id;
+      const buttons: HTMLButtonElement[] = [];
+      const show = () => {
+        for (const b of buttons) b.classList.toggle("active", b.value === String(values[spec.key]));
+        row.classList.toggle("changed", values[spec.key] !== spec.default);
+      };
+      for (const o of spec.options) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.value = o.value;
+        b.textContent = o.label;
+        b.addEventListener("click", () => {
+          if (values[spec.key] === o.value) return;
+          values[spec.key] = o.value;
+          show();
+          changed(spec);
+          b.blur();
+        });
+        buttons.push(b);
+        seg.append(b);
+      }
+      show();
+      refreshers.push(show);
+      row.append(label, seg);
+      finishRow(row, spec, [spec.key]);
     } else if (spec.kind === "choice") {
       const label = document.createElement("label");
       label.htmlFor = id;
       label.textContent = spec.label;
+      tags(spec, label);
       const input = document.createElement("select");
       input.id = id;
       for (const o of spec.options) {
@@ -152,70 +358,84 @@ export function renderParamControls(
         opt.textContent = o.label;
         input.append(opt);
       }
-      input.value = String(values[spec.key]);
+      const show = () => {
+        input.value = String(values[spec.key]);
+        row.classList.toggle("changed", values[spec.key] !== spec.default);
+      };
+      show();
       input.addEventListener("change", () => {
         values[spec.key] = input.value;
-        onChange(spec);
+        show();
+        changed(spec);
         // Hand the keyboard back so Space / R keep driving the simulation.
         input.blur();
       });
-      refreshers.push(() => (input.value = String(values[spec.key])));
+      refreshers.push(show);
       row.append(label, input);
-    } else {
+      finishRow(row, spec, [spec.key]);
+    } else if (spec.kind === "boolean") {
       row.classList.add("param-toggle");
       const label = document.createElement("label");
       label.htmlFor = id;
       label.textContent = spec.label;
+      tags(spec, label);
       const input = document.createElement("input");
       input.type = "checkbox";
       input.id = id;
-      input.checked = Boolean(values[spec.key]);
-      input.addEventListener("change", () => {
-        values[spec.key] = input.checked;
-        onChange(spec);
-      });
-      refreshers.push(() => (input.checked = Boolean(values[spec.key])));
-      row.append(input, label);
-    }
-
-    if (locks) {
-      row.classList.add("lockable");
-      const lock = document.createElement("button");
-      lock.type = "button";
-      lock.className = "lock";
-      lock.innerHTML = LOCK_ICON;
       const show = () => {
-        const on = locks.keys.has(spec.key);
-        lock.classList.toggle("on", on);
-        lock.setAttribute("aria-pressed", String(on));
-        lock.title = on ? "Locked: Randomize leaves this alone. Click to unlock." : "Lock, so Randomize leaves this alone";
+        input.checked = Boolean(values[spec.key]);
+        row.classList.toggle("changed", Boolean(values[spec.key]) !== spec.default);
       };
       show();
-      lock.addEventListener("click", () => {
-        if (!locks.keys.delete(spec.key)) locks.keys.add(spec.key);
+      input.addEventListener("change", () => {
+        values[spec.key] = input.checked;
         show();
-        locks.changed();
-        lock.blur();
+        changed(spec);
       });
-      row.prepend(lock);
+      refreshers.push(show);
+      row.append(input, label);
+      finishRow(row, spec, [spec.key]);
+    } else if (spec.widget === "pad") {
+      const xs = byKey.get(spec.keys[0]), ys = byKey.get(spec.keys[1]);
+      if (!xs || !ys || xs.kind !== "number" || ys.kind !== "number") continue;
+      row.classList.add("param-widget");
+      const label = document.createElement("label");
+      const name = document.createElement("span");
+      name.textContent = spec.label;
+      label.append(name);
+      const readout = document.createElement("div");
+      readout.className = "widget-caption";
+      const pad = padControl(xs, ys, values, (s) => { notify(s.key); changed(s); }, readout);
+      pads.push({ spec, draw: pad.draw });
+      refreshers.push(() => pad.draw());
+      (dependents[xs.key] ??= []).push(() => pad.draw());
+      (dependents[ys.key] ??= []).push(() => pad.draw());
+      row.append(label, pad.canvas, readout);
+      finishRow(row, spec, spec.keys);
+    } else {
+      const sides = spec.keys.map((k) => byKey.get(k)).filter((s): s is ChoiceSpec => !!s && s.kind === "choice");
+      if (sides.length !== 4) continue;
+      row.classList.add("param-widget");
+      const label = document.createElement("label");
+      const name = document.createElement("span");
+      name.textContent = spec.label;
+      label.append(name);
+      const readout = document.createElement("div");
+      readout.className = "widget-caption";
+      const anchors = anchorsControl(sides, values, (s) => changed(s), readout);
+      refreshers.push(anchors.draw);
+      row.append(label, anchors.canvas, readout);
+      finishRow(row, spec, spec.keys);
     }
-
-    const badge = document.createElement("div");
-    badge.className = "mod-badge";
-    badge.hidden = true;
-    badges[spec.key] = badge;
-    row.append(badge);
-    if (spec.description) {
-      const help = document.createElement("div");
-      help.className = "param-help";
-      help.textContent = spec.description;
-      row.append(help);
-    }
-    parentFor(spec.group).append(row);
   }
+  updateContext();
 
   return {
-    refresh: () => refreshers.forEach((r) => r()),
+    refresh: () => {
+      refreshers.forEach((r) => r());
+      updateContext();
+    },
+    setHelp: (on) => container.classList.toggle("show-help", on),
     showRoutes(labels) {
       for (const key in badges) {
         badges[key].textContent = labels[key] ? `♪ ${labels[key]}` : "";
@@ -231,8 +451,7 @@ export function renderParamControls(
           // A bar from the slider's own value to where modulation has pushed it.
           // It only moves when it moves a visible amount: each move makes the
           // webview repaint the sidebar, which is slow while music plays.
-          const range = s.spec.max - s.spec.min;
-          const a = (Math.min(v, base) - s.spec.min) / range, b = (Math.max(v, base) - s.spec.min) / range;
+          const a = toPos(s.spec, Math.min(v, base)), b = toPos(s.spec, Math.max(v, base));
           const drawn = `translateX(${(a * 100).toFixed(1)}%) scaleX(${Math.max(0.015, b - a).toFixed(3)})`;
           if (drawn !== s.drawn) {
             s.drawn = drawn;
@@ -245,8 +464,226 @@ export function renderParamControls(
           s.shown = on;
         }
       }
+      for (const p of pads) p.draw(effective);
     },
   };
+}
+
+/** The pad's height in CSS pixels; its width follows the panel. */
+const PAD_HEIGHT = 96;
+const PAD_INSET = 7;
+
+/**
+ * An XY pad that moves two number parameters at once: left to right is the
+ * first, bottom to top the second. A hollow ring shows where modulation has
+ * pushed them. Double-click puts both back to their defaults.
+ */
+function padControl(
+  xs: NumberSpec, ys: NumberSpec, values: ParamValues, changed: (spec: NumberSpec) => void, readout: HTMLElement,
+): { canvas: HTMLCanvasElement; draw(effective?: ParamValues): void } {
+  const canvas = document.createElement("canvas");
+  canvas.className = "pad";
+  canvas.title = `Drag: left to right sets ${xs.label}, bottom to top sets ${ys.label}. Double-click for the defaults.`;
+  let ctx: CanvasRenderingContext2D | null = null;
+  let w = 0, h = PAD_HEIGHT;
+  let drawn = "";
+  const frac = (s: NumberSpec, v: number) => Math.min(1, Math.max(0, (v - s.min) / (s.max - s.min)));
+  const px = (x: number) => PAD_INSET + x * (w - 2 * PAD_INSET), py = (y: number) => h - PAD_INSET - y * (h - 2 * PAD_INSET);
+  const label = (s: NumberSpec, v: number) => (s.format ? s.format(v, values) : formatNumber(v, s.step));
+  const size = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth || 220;
+    if (width === w && ctx) return;
+    w = width;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    ctx = canvas.getContext("2d");
+    ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawn = "";
+  };
+  const draw = (effective?: ParamValues) => {
+    size();
+    const g = ctx;
+    if (!g) return;
+    const bx = frac(xs, values[xs.key] as number), by = frac(ys, values[ys.key] as number);
+    const ex = effective ? frac(xs, effective[xs.key] as number) : bx, ey = effective ? frac(ys, effective[ys.key] as number) : by;
+    const pushed = Math.abs(ex - bx) > 0.004 || Math.abs(ey - by) > 0.004;
+    const key = `${bx.toFixed(3)}|${by.toFixed(3)}|${pushed ? `${ex.toFixed(3)}|${ey.toFixed(3)}` : ""}`;
+    if (key === drawn) return;
+    drawn = key;
+    g.clearRect(0, 0, w, h);
+    const style = getComputedStyle(canvas);
+    const cyan = style.getPropertyValue("--cyan").trim() || "#2ad4ff";
+    const line = style.getPropertyValue("--line").trim() || "rgba(255,255,255,0.1)";
+    const muted = style.getPropertyValue("--muted").trim() || "#9cc7cf";
+    // A grid, with the defaults' crossing marked.
+    g.strokeStyle = line;
+    g.lineWidth = 1;
+    g.beginPath();
+    for (let i = 0; i <= 4; i++) {
+      g.moveTo(px(i / 4), PAD_INSET); g.lineTo(px(i / 4), h - PAD_INSET);
+      g.moveTo(PAD_INSET, py(i / 4)); g.lineTo(w - PAD_INSET, py(i / 4));
+    }
+    g.stroke();
+    const dx = px(frac(xs, xs.default)), dy = py(frac(ys, ys.default));
+    g.strokeStyle = muted;
+    g.beginPath();
+    g.moveTo(dx - 4, dy); g.lineTo(dx + 4, dy);
+    g.moveTo(dx, dy - 4); g.lineTo(dx, dy + 4);
+    g.stroke();
+    const x = px(bx), y = py(by);
+    g.strokeStyle = cyan;
+    g.globalAlpha = 0.35;
+    g.beginPath();
+    g.moveTo(x, PAD_INSET); g.lineTo(x, h - PAD_INSET);
+    g.moveTo(PAD_INSET, y); g.lineTo(w - PAD_INSET, y);
+    g.stroke();
+    g.globalAlpha = 1;
+    if (pushed) {
+      g.beginPath();
+      g.arc(px(ex), py(ey), 5, 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.fillStyle = cyan;
+    g.beginPath();
+    g.arc(x, y, 5, 0, Math.PI * 2);
+    g.fill();
+    readout.textContent = `${label(xs, values[xs.key] as number)} · ${label(ys, values[ys.key] as number)}`;
+  };
+  const move = (e: PointerEvent) => {
+    const r = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - r.left - PAD_INSET) / (r.width - 2 * PAD_INSET)));
+    const y = Math.max(0, Math.min(1, 1 - (e.clientY - r.top - PAD_INSET) / (r.height - 2 * PAD_INSET)));
+    values[xs.key] = fromPos({ ...xs, curve: 1 }, x);
+    values[ys.key] = fromPos({ ...ys, curve: 1 }, y);
+    draw();
+    changed(xs);
+    changed(ys);
+  };
+  let dragging = false;
+  canvas.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    canvas.setPointerCapture(e.pointerId);
+    move(e);
+  });
+  canvas.addEventListener("pointermove", (e) => { if (dragging) move(e); });
+  const end = () => { dragging = false; };
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+  canvas.addEventListener("dblclick", () => {
+    values[xs.key] = xs.default;
+    values[ys.key] = ys.default;
+    draw();
+    changed(xs);
+    changed(ys);
+  });
+  // The panel may not be laid out yet; draw once it is.
+  requestAnimationFrame(() => draw());
+  return { canvas, draw };
+}
+
+/**
+ * Fabric's anchors as a picture: a sheet whose four edges show how they are
+ * held. Clicking an edge steps it through its options.
+ */
+function anchorsControl(
+  sides: ChoiceSpec[], values: ParamValues, changed: (spec: ChoiceSpec) => void, readout: HTMLElement,
+): { canvas: HTMLCanvasElement; draw(): void } {
+  const W = 120, H = 84, M = 14;
+  const canvas = document.createElement("canvas");
+  canvas.className = "anchors";
+  canvas.title = "Click an edge of the sheet to change how it is held";
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  const g = canvas.getContext("2d");
+  g?.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Top, bottom, left, right: where each edge runs and which way its points are laid.
+  const edges = [
+    { x0: M, y0: M, x1: W - M, y1: M },
+    { x0: M, y0: H - M, x1: W - M, y1: H - M },
+    { x0: M, y0: M, x1: M, y1: H - M },
+    { x0: W - M, y0: M, x1: W - M, y1: H - M },
+  ];
+  const optionLabel = (s: ChoiceSpec) => s.options.find((o) => o.value === values[s.key])?.label ?? String(values[s.key]);
+  const draw = () => {
+    if (!g) return;
+    const style = getComputedStyle(canvas);
+    const cyan = style.getPropertyValue("--cyan").trim() || "#2ad4ff";
+    const muted = style.getPropertyValue("--muted").trim() || "#9cc7cf";
+    const line = style.getPropertyValue("--line").trim() || "rgba(255,255,255,0.1)";
+    g.clearRect(0, 0, W, H);
+    // The sheet.
+    g.fillStyle = "rgba(42, 212, 255, 0.06)";
+    g.fillRect(M, M, W - 2 * M, H - 2 * M);
+    g.strokeStyle = line;
+    g.lineWidth = 1;
+    g.setLineDash([3, 3]);
+    g.strokeRect(M + 0.5, M + 0.5, W - 2 * M - 1, H - 2 * M - 1);
+    g.setLineDash([]);
+    sides.forEach((s, i) => {
+      const e = edges[i];
+      const mode = values[s.key] as string;
+      const n = 7;
+      if (mode === "edge") {
+        g.strokeStyle = cyan;
+        g.lineWidth = 3;
+        g.beginPath();
+        g.moveTo(e.x0, e.y0); g.lineTo(e.x1, e.y1);
+        g.stroke();
+        return;
+      }
+      const dots = mode === "rings" ? [0, 1, 2, 3, 4, 5, 6] : mode === "ends" ? [0, 6] : [];
+      g.fillStyle = cyan;
+      for (const k of dots) {
+        const t = k / (n - 1);
+        g.beginPath();
+        g.arc(e.x0 + (e.x1 - e.x0) * t, e.y0 + (e.y1 - e.y0) * t, 2.6, 0, Math.PI * 2);
+        g.fill();
+      }
+      if (mode === "free") {
+        // A loose edge: a faint wave just outside it.
+        g.strokeStyle = muted;
+        g.globalAlpha = 0.5;
+        g.lineWidth = 1;
+        g.beginPath();
+        const vertical = e.x0 === e.x1;
+        const out = i === 0 || i === 2 ? -5 : 5;
+        for (let k = 0; k <= 12; k++) {
+          const t = k / 12;
+          const wobble = Math.sin(t * Math.PI * 3) * 2;
+          const x = vertical ? e.x0 + out + wobble : e.x0 + (e.x1 - e.x0) * t;
+          const y = vertical ? e.y0 + (e.y1 - e.y0) * t : e.y0 + out + wobble;
+          if (k === 0) g.moveTo(x, y);
+          else g.lineTo(x, y);
+        }
+        g.stroke();
+        g.globalAlpha = 1;
+      }
+    });
+    readout.textContent = sides.map((s) => `${s.label.split(" ")[0]} ${optionLabel(s).split(" ")[0].toLowerCase()}`).join(" · ");
+  };
+  canvas.addEventListener("click", (e) => {
+    const r = canvas.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width) * W, y = ((e.clientY - r.top) / r.height) * H;
+    // The edge the click is nearest to.
+    const d = [Math.abs(y - M), Math.abs(y - (H - M)), Math.abs(x - M), Math.abs(x - (W - M))];
+    const i = d.indexOf(Math.min(...d));
+    const s = sides[i];
+    const k = s.options.findIndex((o) => o.value === values[s.key]);
+    values[s.key] = s.options[(k + 1) % s.options.length].value;
+    draw();
+    changed(s);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    const r = canvas.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width) * W, y = ((e.clientY - r.top) / r.height) * H;
+    const d = [Math.abs(y - M), Math.abs(y - (H - M)), Math.abs(x - M), Math.abs(x - (W - M))];
+    const s = sides[d.indexOf(Math.min(...d))];
+    canvas.title = `${s.label}: ${optionLabel(s)}. Click to change.`;
+  });
+  draw();
+  return { canvas, draw };
 }
 
 function formatNumber(v: number, step: number): string {

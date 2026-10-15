@@ -355,13 +355,15 @@ label.check { display: inline-flex; align-items: center; gap: 7px; cursor: point
 /* Global presets: a dropdown with Save and Delete beside it. */
 .preset-row { display: flex; gap: 4px; margin-bottom: 10px; }
 .preset-row[hidden] { display: none; }
+/* Buttons are inline-flex, which would beat the hidden attribute. */
+button[hidden], .param[hidden], .mod-badge[hidden] { display: none !important; }
 .preset-row select, .preset-row input { flex: 1; min-width: 0; }
 
 /* Rows in the panels: name, slider and value on one line, Photoshop-style. */
 #sidebar .param { margin-bottom: 7px; }
 #sidebar .param:has(> input[type="range"]),
 #sidebar .param:has(> select) {
-  display: grid; grid-template-columns: 96px minmax(0, 1fr) 44px; column-gap: 8px; align-items: center;
+  display: grid; grid-template-columns: 100px minmax(0, 1fr) 40px; column-gap: 8px; align-items: center;
 }
 #sidebar .param:has(> input[type="range"]) > label { display: contents; }
 #sidebar .param > label > span:first-child,
@@ -377,30 +379,75 @@ label.check { display: inline-flex; align-items: center; gap: 7px; cursor: point
 #sidebar .param > .param-help { grid-column: 1 / -1; }
 #sidebar .param:has(> select) > .param-help { margin-top: 3px; }
 
-/* A padlock before each parameter keeps it out of Randomize; it brightens on hover and stays lit while locked. */
-#sidebar .param.lockable:has(> input[type="range"]),
-#sidebar .param.lockable:has(> select) { grid-template-columns: 14px 80px minmax(0, 1fr) 44px; column-gap: 6px; }
-#sidebar .param.lockable > .lock { grid-column: 1; grid-row: 1; }
-#sidebar .param.lockable > label > span:first-child,
-#sidebar .param.lockable:has(> select) > label { grid-column: 2; }
-#sidebar .param.lockable > input[type="range"] { grid-column: 3; }
-#sidebar .param.lockable > label > .readout { grid-column: 4; }
-#sidebar .param.lockable > select { grid-column: 3 / -1; }
-#sidebar .param.lockable > .mod-track { grid-column: 3; }
-#sidebar .param.lockable > .mod-badge { grid-column: 3 / -1; }
+/* The small buttons before a parameter: a padlock that keeps it out of Randomize and a ♪ that adds a
+   route to it. They share one cell so the labels line up, brighten on hover, and the padlock stays
+   lit while locked. */
+#sidebar .param:is(.lockable, .routable):has(> input[type="range"]),
+#sidebar .param:is(.lockable, .routable):has(> select) { grid-template-columns: var(--icons, 14px) 86px minmax(0, 1fr) 40px; column-gap: 6px; }
+#sidebar .param.lockable.routable { --icons: 30px; }
+#sidebar .param:is(.lockable, .routable) > .param-icons { grid-column: 1; grid-row: 1; }
+#sidebar .param:is(.lockable, .routable) > label > span:first-child,
+#sidebar .param:is(.lockable, .routable):has(> select) > label { grid-column: 2; }
+#sidebar .param:is(.lockable, .routable) > input[type="range"] { grid-column: 3; }
+#sidebar .param:is(.lockable, .routable) > label > .readout { grid-column: 4; }
+#sidebar .param:is(.lockable, .routable) > select { grid-column: 3 / -1; }
+#sidebar .param:is(.lockable, .routable) > .mod-track { grid-column: 3; }
+#sidebar .param:is(.lockable, .routable) > .mod-badge { grid-column: 3 / -1; }
 #sidebar .param-toggle.lockable .param-help { padding-left: 42px; }
-button.lock {
+.param-icons { display: flex; align-items: center; gap: 2px; }
+button.lock, button.route-add {
   width: 14px; height: 14px; padding: 0; border: 0; background: none; border-radius: 3px;
   display: grid; place-items: center; color: var(--muted); opacity: 0.35; cursor: pointer;
 }
-button.lock:hover:not(:disabled) { background: none; border: 0; color: var(--strong); }
+button.lock:hover:not(:disabled), button.route-add:hover:not(:disabled) { background: none; border: 0; color: var(--strong); }
 button.lock.on:hover:not(:disabled) { color: var(--accent-hover); }
-.lock svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.3; }
+.lock svg, .route-add svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.3; }
+.route-add svg circle { fill: currentColor; stroke: none; }
 .lock .shackle { transform: translateY(-1.5px); }
-.param:hover > .lock, .lock:focus-visible { opacity: 0.85; }
+.param:hover > .param-icons > button, .lock:focus-visible, .route-add:focus-visible { opacity: 0.85; }
 .lock.on { color: var(--cyan); opacity: 1; }
 .lock.on svg rect { fill: currentColor; }
 .lock.on .shackle { transform: none; }
+.route-add:hover { color: var(--cyan) !important; }
+
+/* Tags after a label: a control that rebuilds the model, or one with a frame-rate cost. */
+.param-tag { margin-left: 4px; font-size: 9px; font-weight: 500; letter-spacing: 0.04em; color: var(--muted); vertical-align: 1px; }
+.param-tag.perf { color: var(--warn); border-color: rgba(255, 176, 32, 0.35); }
+/* A value that is off its default gets a dot; double-click the slider to put it back. */
+.param.changed > label > span:first-child::after,
+.param.changed:has(> select) > label::after,
+.param-toggle.changed > label::after,
+.param-segmented.changed > label::after {
+  content: ""; display: inline-block; width: 4px; height: 4px; margin-left: 5px; border-radius: 50%;
+  background: var(--cyan); vertical-align: 2px; opacity: 0.8;
+}
+/* The pad and the anchor picture: a label row, then the control across the panel. */
+#sidebar .param-widget { display: grid; grid-template-columns: var(--icons, 14px) minmax(0, 1fr); column-gap: 6px; }
+#sidebar .param-widget:not(.lockable) { grid-template-columns: minmax(0, 1fr); }
+#sidebar .param-widget > .param-icons { grid-column: 1; grid-row: 1; }
+#sidebar .param-widget > label { grid-column: -2 / -1; grid-row: 1; display: flex; margin: 0 0 4px; }
+#sidebar .param-widget > canvas { grid-column: 1 / -1; grid-row: 2; }
+#sidebar .param-widget > .widget-caption, #sidebar .param-widget > .param-help, #sidebar .param-widget > .mod-badge { grid-column: 1 / -1; }
+.widget-caption { margin-top: 3px; color: var(--muted); font-family: var(--mono); font-size: 10.5px; font-variant-ligatures: none; text-align: center; }
+canvas.pad { width: 100%; height: 96px; border-radius: var(--radius-sm); background: var(--field); border: 1px solid var(--line); cursor: crosshair; touch-action: none; }
+canvas.anchors { width: 120px; height: 84px; justify-self: center; cursor: pointer; }
+/* A dropdown drawn as a row of buttons. */
+#sidebar .param-segmented { display: grid; grid-template-columns: var(--icons, 14px) minmax(0, 1fr); column-gap: 6px; }
+#sidebar .param-segmented:not(.lockable) { grid-template-columns: minmax(0, 1fr); }
+#sidebar .param-segmented > .param-icons { grid-column: 1; grid-row: 1; }
+#sidebar .param-segmented > label { grid-column: -2 / -1; grid-row: 1; margin: 0; }
+#sidebar .param-segmented > .seg { grid-column: 1 / -1; grid-row: 2; }
+#sidebar .param-segmented > .param-help, #sidebar .param-segmented > .mod-badge { grid-column: 1 / -1; }
+.seg {
+  display: flex; flex-wrap: wrap; gap: 2px; padding: 2px; margin-top: 3px;
+  border: 1px solid var(--edge); border-radius: 9px; background: rgba(0, 0, 0, 0.25);
+}
+.seg button { flex: 1 1 auto; height: 22px; padding: 0 8px; border: 0; border-radius: 7px; background: none; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.seg button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); color: var(--text); }
+.seg button.active { color: var(--cyan); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.25); }
+/* A row found from the matrix lights up for a moment. */
+@keyframes flash { from { outline-color: var(--cyan); } to { outline-color: transparent; } }
+.param.flash, .route.flash { outline: 1px solid transparent; outline-offset: 3px; border-radius: 4px; animation: flash 1.6s ease-out; }
 
 .param label { display: flex; justify-content: space-between; gap: 4px; margin-bottom: 4px; }
 .param .readout { color: var(--muted); }
@@ -408,8 +455,14 @@ button.lock.on:hover:not(:disabled) { color: var(--accent-hover); }
 .param-toggle .param-help, .param-toggle .mod-badge { flex-basis: 100%; }
 #sidebar .param-toggle .param-help { padding-left: 22px; }
 .param-toggle label { margin: 0; cursor: pointer; }
-.param-help { color: var(--muted); font-size: 11px; line-height: 1.4; margin-top: 3px; }
+/* Descriptions are tooltips unless the panel's ? is on (macros always show theirs). */
+.param-help { display: none; color: var(--muted); font-size: 11px; line-height: 1.4; margin-top: 3px; }
+.show-help .param-help { display: block; }
 .mod-badge { color: var(--cyan); font-size: 11px; margin-top: 2px; }
+.mod-badge.clickable { cursor: pointer; }
+.mod-badge.clickable:hover { text-decoration: underline; }
+.panel-action.on { color: var(--cyan); border-color: var(--edge-strong); }
+#params-help { width: 20px; padding: 0; font-weight: 700; }
 
 .param-group { margin-bottom: 6px; }
 .param-group > summary {
@@ -424,8 +477,7 @@ button.lock.on:hover:not(:disabled) { color: var(--accent-hover); }
 .param-group > summary::before { content: "▾"; display: inline-block; width: 14px; color: var(--cyan); letter-spacing: 0; }
 .param-group:not([open]) > summary::before { content: "▸"; color: var(--muted); }
 
-/* Global controls keep their descriptions as tooltips; macros glow purple. */
-#global-controls .param-help { display: none; }
+/* Macros glow purple. */
 #macros > .muted { margin: 0; }
 #macros .param > label > span:first-child { color: var(--strong); }
 #macros .mod-badge { color: var(--macro); }
@@ -696,6 +748,21 @@ button.preset-chip.active { color: var(--part, var(--cyan)); border-color: var(-
 .mod-rows { display: flex; flex-direction: column; gap: 6px; }
 .mod-rows > .muted { margin: 0; }
 .route { display: grid; grid-template-columns: auto 118px 36px auto minmax(110px, 180px) minmax(70px, 1fr) 40px auto auto; gap: 6px; align-items: center; }
+.route.reaction-row { grid-template-columns: auto 118px 36px auto minmax(110px, 180px) minmax(70px, 1fr) 40px auto; }
+.route .locate { width: 26px; padding: 0; color: var(--muted); }
+/* Built-in reactions grouped by sound: the summary carries the group's strength. */
+.mod-groups { display: flex; flex-direction: column; gap: 4px; }
+.mod-group > summary {
+  display: grid; grid-template-columns: 16px 150px minmax(70px, 1fr) 44px; gap: 6px; align-items: center;
+  cursor: pointer; list-style: none; padding: 4px 6px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: rgba(255, 255, 255, 0.025);
+}
+.mod-group > summary::-webkit-details-marker { display: none; }
+.mod-group > summary::before { content: "▸"; color: var(--muted); }
+.mod-group[open] > summary::before { content: "▾"; color: var(--cyan); }
+.mod-group > summary:hover { background: rgba(255, 255, 255, 0.05); }
+.mod-group-name { color: var(--strong); font-weight: 500; }
+.mod-group > summary.off > :not(:first-child) { opacity: 0.4; }
+.mod-group > .mod-rows { margin: 6px 0 6px 22px; }
 .route select { height: 24px; }
 .route button { height: 24px; }
 .route .dice { width: 26px; padding: 0; }

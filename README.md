@@ -77,15 +77,17 @@ Run the setup `.exe`. It installs for your user only, so it needs no admin right
 
 The layout follows Photoshop:
 
-- **Options bar** across the top: the model picker, Pause / Step / Reset, and **Randomize**, which sets every parameter of the model to a random value except the ones you've locked with their padlock.
+- **Options bar** across the top: the model picker, Pause / Step / Reset, **Randomize**, which rolls every slider of the model inside its useful band (Shift-click rolls the dropdowns, switches and rebuild sizes too) except the ones you've locked with their padlock, and **Nudge**, which moves every slider a little.
 - **Canvas** in the middle.
-- **Panels** down the right, each foldable: the model's description and how to interact with it, its **Parameters**, the **Global controls** and the model's **Macros**.
+- **Panels** down the right, each foldable: the model's description and how to interact with it, its **Macros**, its **Parameters** and the **Global controls**.
 - **Music panel** under the canvas, with the sequencer, modulation, MIDI and audio file tabs.
 - **Bottom bar**: switches to show or hide the music panel and the sidebar, frame rate with simulation and draw times, **Resolution**, **Drawing** (GPU or CPU), and the **Update** button.
 
 **Global controls** apply to every model and stay put when you switch: colour scheme (follow the melody, rainbow, fire, ice or bioluminescent), hue shift and cycle, saturation, brightness, contrast and negative; gravity direction and strength; energy; trails; and tunnel zoom and spin, which make the trails fly outward and turn for a feedback-tunnel effect. The presets dropdown sets them all at once, with ten built in (Neon tunnel, Inferno, Deep sea, Noir and others) and **Save** for your own.
 
 **Macros** are four 0..1 knobs per model that each push several parameters at once.
+
+**Parameters** opens on the five to eight controls that change the picture most; the finer ones are under **More**, with the ones that rebuild the model (counts, resolution) marked ↻. Hover a control for what it does, or press **?** to show the descriptions under every control. Double-click a slider to put it back to its default, and **Reset** puts the whole model back; a dot after a label marks a value that is off its default. Values are saved per model. Some controls only appear when they apply (Plexus shows the sliders for the pattern you picked; Cymatics shows Turning for the round plate), and two models have pads: Living ink's **Chemistry** pad moves its feed and kill rates together, and Fabric's **Anchors** picture sets how each edge is held with a click. The ♪ beside any slider adds a modulation route to it.
 
 Keyboard: `Space` pause or play the visuals and the music, `Enter` play or stop the sequencer, `R` reset the model, `.` step one frame while paused, `S` show or hide the sidebar.
 
@@ -134,12 +136,12 @@ Every hit, bass note and chord reaches the current model, and every control can 
 
 ![The modulation matrix: built-in reactions on the left, your routes on the right](docs/screenshots/modulation.png)
 
-Two columns of rows, each with a live meter, a strength, an on/off switch, a dice and a delete button:
+Two columns:
 
-- **Built into this model**: what the model does with the music by itself, such as Kick → Burst outward. **Restore built-ins** brings back any you deleted.
-- **Your routes**: a source pushes a slider or macro by a share of its range. Sources are note envelopes (any note, kick, snare, hat, melody), velocity and pitch, held MIDI notes, tempo-synced LFOs, audio levels (overall, bass, mids, treble), the mod wheel, pitch bend and any MIDI CC. A ♪ under a sidebar slider names what is pushing it.
+- **Built into this model**: what the model does with the music by itself, such as Kick → Burst outward, grouped into Drums, Melody and chords, and Loudness. Each group folds to one strength slider that sets every reaction in it; open it for each reaction's own strength, on/off switch and delete button. A reaction's strength is also the control for what it does: Fabric's Spectrum lift row, say, sets how high the spectrum lifts the fabric. **Restore built-ins** brings back any you deleted and **Reset built-ins** puts them all back at 100%.
+- **Your routes**: a source pushes a slider, macro or global control by a share of its range, each with a live meter, a dice that rolls a random target and amount, and → to find the slider in the sidebar. Sources are the drums, melody, bass notes and chords, tempo-synced LFOs, audio levels (overall, bass, mids, treble), a few advanced ones, and MIDI (mod wheel, pitch bend and any CC) once a controller is connected. A ♪ under a sidebar slider names what is pushing it and opens the route; the ♪ beside a slider adds one.
 
-The dice rolls a random strength (and, on your routes, a random target). **Intensity** scales every route on every model, **Note decay** sets how long a hit keeps pushing, and **Music drives the visuals** turns it all off. Routes and built-in settings are saved per model.
+**Intensity** scales every reaction and route on every model, **Note decay** sets how long a hit keeps pushing, **Smoothing** stops the audio levels flickering a slider, and the **Visuals** switch in the music panel's header turns it all off. Routes and built-in settings are saved per model.
 
 ### MIDI
 

@@ -1,5 +1,5 @@
 import { hsla, rgba, type Gfx } from "../gl/gfx";
-import { NOMINAL_DT, type ModelDefinition, type MusicFrame, type ParamSpec, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
+import { NOMINAL_DT, curveFor, type ModelDefinition, type MusicFrame, type ParamSpec, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { gravityTo, gravityModeParam, isUniform, uniformDir } from "./lib/gravity";
 import { noteHue } from "./lib/music";
 import { Feedback, applyFeedback, colourParam, feedbackParams, schemeHue } from "./lib/visual";
@@ -210,7 +210,9 @@ class ClothSim implements SimulationModel {
     this.iterDebt = Math.min(perStep * 2, this.iterDebt + perStep * (dt / NOMINAL_DT));
     const iters = Math.floor(this.iterDebt + 1e-6);
     this.iterDebt -= iters;
-    const tear = p.tearable ? (p.tearLimit as number) * this.rest : Infinity;
+    // Tearing 0 never tears; above it a link snaps when stretched past 12 (barely tears) down to 1.5 (brittle) times its rest length.
+    const tearing = p.tearing as number;
+    const tear = tearing > 0 ? 12 * Math.pow(0.125, tearing) * this.rest : Infinity;
     const { ca, cb, alive, rest } = this;
     for (let it = 0; it < iters; it++) {
       for (let c = 0; c < ca.length; c++) {
@@ -578,58 +580,53 @@ export const cloth: ModelDefinition = {
   fixedDt: 1 / 60,
   paintsBackground: true,
   params: [
-    { kind: "number", key: "spectrumLift", label: "Spectrum lift", min: 0, max: 4, step: 0.05, default: 1.2, group: "Music",
-      description: "How high loud frequencies lift their part of the fabric. High values fling the hem into the air." },
-    { kind: "number", key: "billow", label: "Bass billow", min: 0, max: 4, step: 0.05, default: 0.8, group: "Music", global: "energy",
-      description: "How much the bass lifts the whole fabric at once." },
-    { kind: "number", key: "punch", label: "Hit punch", min: 0, max: 4, step: 0.05, default: 1, group: "Music", global: "energy",
-      description: "How hard kicks, snares and notes shove the fabric." },
+    { kind: "widget", widget: "anchors", key: "anchors", label: "Anchors", keys: SIDES.map((side) => `anchor${side}`),
+      description: "How each side of the sheet is held. Click an edge to step it through Free, Whole edge, Rings and Just the corners." },
+    ...SIDES.map((side): ParamSpec => ({
+      kind: "choice", key: `anchor${side}`, label: `${side} side`, options: ANCHOR_OPTIONS,
+      default: side === "Top" ? "rings" : "free",
+    })),
+    {
+      kind: "number", key: "wind", label: "Wind", min: -800, max: 800, step: 5, default: 40, snapZero: true, random: [-400, 400], global: "energy",
+      description: "A gusty sideways breeze. Negative blows left, positive blows right.",
+    },
+    {
+      kind: "number", key: "stiffness", label: "Stiffness", min: 1, max: 40, step: 1, default: 6, curve: curveFor(1, 40, 6), random: [2, 20],
+      description: "How firmly the fabric holds its shape. Low is stretchy like rubber; high is stiff like canvas.",
+    },
+    {
+      kind: "number", key: "tearing", label: "Tearing", min: 0, max: 1, step: 0.01, default: 0.5, random: [0, 0.8],
+      format: (v) => (v === 0 ? "never" : `${Math.round(v * 100)}%`),
+      description: "How easily the fabric rips. Zero never tears; high is brittle and rips on every hit.",
+    },
+    {
+      kind: "number", key: "heal", label: "Healing", min: 0, max: 30, step: 0.1, default: 1, curve: curveFor(0.01, 30, 1), random: [0, 8],
+      description: "How fast torn fabric knits back together. Zero keeps every tear; 30 closes cuts almost as fast as you make them.",
+    },
+    {
+      kind: "number", key: "resolution", label: "Detail", min: 10, max: 200, step: 1, default: 48, resetOnChange: true, perf: true,
+      description: "How many points across the fabric, i.e. how many polygons it is made of. Higher folds more finely but is heavier to run.",
+    },
+    {
+      kind: "number", key: "smoothing", label: "Smoothing", min: 1, max: 4, step: 1, default: 2, advanced: true,
+      description: "Draws each square of fabric as 1 to 16 smaller polygons on a curve, so folds look round. Costs drawing time, not simulation, and eases off by itself at high resolutions.",
+    },
+    {
+      kind: "boolean", key: "threads", label: "Show threads", default: true, advanced: true,
+      description: "Draws the weave as fine glowing lines over the fabric; they sparkle with the hi-hats.",
+    },
+    // Set by the matrix rows Spectrum lift and Bass billow; Hit punch stays at its default, since each
+    // hit's row in the matrix now sets how hard that hit lands.
+    { kind: "number", key: "spectrumLift", label: "Spectrum lift", min: 0, max: 4, step: 0.05, default: 1.2, hidden: true },
+    { kind: "number", key: "billow", label: "Bass billow", min: 0, max: 4, step: 0.05, default: 0.8, hidden: true },
+    { kind: "number", key: "punch", label: "Hit punch", min: 0, max: 4, step: 0.05, default: 1, hidden: true },
     gravityModeParam("down"),
     {
       kind: "number", key: "gravity", label: "Gravity strength", min: 0, max: 5000, step: 10, default: 700, global: "gravity", hidden: true,
       description: "How heavy the fabric hangs. Low floats like chiffon; very high stretches and rips it.",
     },
-    {
-      kind: "number", key: "wind", label: "Wind", min: -800, max: 800, step: 5, default: 40, group: "Forces", global: "energy",
-      description: "A gusty sideways breeze. Negative blows left, positive blows right. Around 700 matches the default gravity, so the fabric streams out sideways.",
-    },
-    {
-      kind: "number", key: "stiffness", label: "Stiffness", min: 1, max: 40, step: 1, default: 6, group: "Behaviour",
-      description: "How firmly the fabric holds its shape. Low is stretchy like rubber; high is stiff like canvas.",
-    },
-    {
-      kind: "number", key: "tearLimit", label: "Tear limit", min: 1.2, max: 12, step: 0.1, default: 4, group: "Behaviour",
-      description: "How far a link can stretch (times its rest length) before it snaps.",
-    },
-    {
-      kind: "boolean", key: "tearable", label: "Tearable", default: true, group: "Behaviour",
-      description: "Lets over-stretched links snap. Off: the cloth stretches without ever breaking.",
-    },
-    {
-      kind: "number", key: "heal", label: "Healing", min: 0, max: 30, step: 0.1, default: 1, group: "Behaviour",
-      description: "How fast torn fabric knits back together. Zero keeps every tear; 30 closes cuts almost as fast as you make them.",
-    },
     colourParam(),
-    {
-      kind: "number", key: "smoothing", label: "Smoothing", min: 1, max: 4, step: 1, default: 2, group: "Look",
-      description: "Draws each square of fabric as 1 to 16 smaller polygons on a curve, so folds look round. Costs drawing time, not simulation, and eases off by itself at high resolutions.",
-    },
-    {
-      kind: "boolean", key: "threads", label: "Show threads", default: true, group: "Look",
-      description: "Draws the weave as fine glowing lines over the fabric; they sparkle with the hi-hats.",
-    },
     ...feedbackParams(0.45),
-    ...SIDES.map((side): ParamSpec => ({
-      kind: "choice", key: `anchor${side}`, label: `${side} side`, group: "Anchors", options: ANCHOR_OPTIONS,
-      default: side === "Top" ? "rings" : "free",
-      description: side === "Top"
-        ? "How the top edge is held. Rings hang it like a curtain; Free lets that side flap loose."
-        : `How the ${side.toLowerCase()} edge is held. Free lets it flap; anchoring it stretches the fabric out that way.`,
-    })),
-    {
-      kind: "number", key: "resolution", label: "Resolution", min: 10, max: 200, step: 1, default: 48, resetOnChange: true, group: "Setup",
-      description: "How many points across the fabric, i.e. how many polygons it is made of. Higher folds more finely but is heavier to run.",
-    },
   ],
   macros: [
     { key: "storm", label: "Storm", description: "A gale whips the fabric sideways and every hit slams into it.",
@@ -637,7 +634,7 @@ export const cloth: ModelDefinition = {
     { key: "float", label: "Weightless", description: "The fabric floats up and drifts with the music in a dreamy haze.",
       targets: [{ param: "gravity", amount: -0.1 }, { param: "spectrumLift", amount: 0.2 }, { param: "billow", amount: 0.15 }, { param: "afterglow", amount: 0.35 }, { param: "zoom", amount: 0.2 }] },
     { key: "shred", label: "Shred", description: "Heavy, brittle fabric that rips to ribbons on every hit, then knits back together.",
-      targets: [{ param: "gravity", amount: 0.12 }, { param: "tearLimit", amount: -0.2 }, { param: "heal", amount: 0.1 }, { param: "punch", amount: 0.4 }, { param: "tearable", set: true, at: 0.1 }] },
+      targets: [{ param: "gravity", amount: 0.12 }, { param: "tearing", amount: 0.35 }, { param: "heal", amount: 0.1 }, { param: "punch", amount: 0.4 }] },
     { key: "vortex", label: "Vortex", description: "Gravity swirls the fabric round the centre inside a turning tunnel.",
       targets: [{ param: "afterglow", amount: 0.35 }, { param: "spin", amount: 0.4 }, { param: "zoom", amount: -0.3 }, { param: "gravityMode", set: "swirl", at: 0.3 }] },
   ],
@@ -653,8 +650,8 @@ export const cloth: ModelDefinition = {
     { source: "tone", label: "Pluck and dye", text: "Plucks the fabric where the note lands (low left, high right) and dyes it the note's colour" },
     { source: "bassline", label: "Hem swell", text: "A slow swell rolls along the hem" },
     { source: "chord", label: "Chord bands", text: "Each note of the chord dyes a soft vertical band of fabric" },
-    { source: "spectrum", label: "Spectrum lift", text: "Each frequency lifts its column of fabric (Spectrum lift)" },
-    { source: "bass", label: "Bass billow", text: "Lifts the whole fabric (Bass billow)" },
+    { source: "spectrum", label: "Spectrum lift", text: "Each frequency lifts its column of fabric. The strength is how high", param: "spectrumLift" },
+    { source: "bass", label: "Bass billow", text: "Lifts the whole fabric. The strength is how much", param: "billow" },
     { source: "level", label: "Glow", text: "The fabric glows brighter as the music gets louder" },
     { source: "treble", label: "Thread sparkle", text: "The threads sparkle" },
   ],
