@@ -16,16 +16,13 @@ export interface SourceInfo {
 }
 
 export const SOURCES: SourceInfo[] = [
-  { id: "env", label: "Any note", group: "Notes" },
   { id: "kick", label: "Kick", group: "Notes" },
   { id: "snare", label: "Snare", group: "Notes" },
   { id: "hat", label: "Hi-hat", group: "Notes" },
   { id: "tone", label: "Melody notes", group: "Notes" },
   { id: "bassline", label: "Bass notes", group: "Notes" },
   { id: "chord", label: "Chords", group: "Notes" },
-  { id: "velocity", label: "Last velocity", group: "Notes" },
-  { id: "pitch", label: "Last pitch", group: "Notes" },
-  { id: "gate", label: "Held MIDI notes", group: "Notes" },
+  { id: "env", label: "Every hit", group: "Notes" },
   { id: "lfoBar", label: "LFO, 1 bar", group: "Tempo" },
   { id: "lfoBeat", label: "LFO, 1 beat", group: "Tempo" },
   { id: "ramp", label: "Ramp, 1 bar", group: "Tempo" },
@@ -33,9 +30,15 @@ export const SOURCES: SourceInfo[] = [
   { id: "bass", label: "Bass", group: "Audio" },
   { id: "mid", label: "Mids", group: "Audio" },
   { id: "treble", label: "Treble", group: "Audio" },
+  { id: "velocity", label: "Last hit's velocity", group: "Advanced" },
+  { id: "pitch", label: "Last melody pitch", group: "Advanced" },
+  { id: "gate", label: "A MIDI key is held", group: "Advanced" },
   { id: "modwheel", label: "Mod wheel (CC 1)", group: "MIDI" },
   { id: "pitchbend", label: "Pitch bend", group: "MIDI", bipolar: true },
 ];
+
+/** The audio bands, which jump every frame; routes read them through the smoothing filter. */
+const SMOOTHED = ["level", "bass", "mid", "treble"];
 
 /** CC numbers offered as sources even before a controller has sent them. */
 const COMMON_CCS = [2, 7, 10, 11, 16, 17, 18, 19, 71, 74];
@@ -56,11 +59,19 @@ export class ModSources {
   readonly values: Record<string, number> = {};
   /** Seconds for a note envelope to fall to ~37%. */
   decay = 0.25;
+  /**
+   * Seconds the audio bands take to follow a change, for routes: the bands
+   * jump every frame, so an unsmoothed route from Bass to a slider flickers.
+   * Zero follows them exactly. The models' own reactions read the raw bands.
+   */
+  smoothing = 0.08;
+  private smoothed: Record<string, number> = {};
   private held = new Set<number>();
   private seenCcs = new Set<number>(COMMON_CCS);
 
   constructor() {
     for (const s of SOURCES) this.values[s.id] = 0;
+    for (const id of SMOOTHED) this.smoothed[id] = 0;
   }
 
   /** Advance envelopes and LFOs. `beats` is the musical clock in quarter notes. */
@@ -77,6 +88,8 @@ export class ModSources {
     this.values.mid = bands.mid;
     this.values.treble = bands.treble;
     this.values.gate = this.held.size > 0 ? 1 : 0;
+    const k = this.smoothing > 0 ? 1 - Math.exp(-dt / this.smoothing) : 1;
+    for (const id of SMOOTHED) this.smoothed[id] += (this.values[id] - this.smoothed[id]) * k;
   }
 
   trigger(ev: NoteEvent): void {
@@ -107,7 +120,13 @@ export class ModSources {
     return [...this.seenCcs].filter((n) => n !== 1).sort((a, b) => a - b);
   }
 
+  /** A source as routes read it: the audio bands smoothed, everything else as it is. */
   get(id: string): number {
+    return this.smoothed[id] ?? this.values[id] ?? 0;
+  }
+
+  /** A source as it is this frame, with no smoothing. */
+  raw(id: string): number {
     return this.values[id] ?? 0;
   }
 }
@@ -120,6 +139,23 @@ export type NumberSpec = Extract<ParamSpec, { kind: "number" }>;
  */
 export function modulatable(def: ModelDefinition): NumberSpec[] {
   return def.params.filter((p): p is NumberSpec => p.kind === "number" && !p.resetOnChange && !p.hidden);
+}
+
+/**
+ * Set the parameters the model's built-in reaction rows stand for: at a
+ * strength of 1 each sits at its default, at 2 at double it, and 0 when the
+ * row is off or gone. Runs on the base values, so macros still push them.
+ */
+export function applyReactions(def: ModelDefinition, strength: (source: string) => number, base: ParamValues): void {
+  for (const r of def.reactions ?? []) {
+    if (!r.param) continue;
+    const k = strength(r.source);
+    for (const key of Array.isArray(r.param) ? r.param : [r.param]) {
+      const spec = def.params.find((p) => p.key === key);
+      if (!spec || spec.kind !== "number") continue;
+      base[key] = Math.min(spec.max, Math.max(spec.min, spec.default * k));
+    }
+  }
 }
 
 /** Macros as slider specs, so the same control code can draw them. Without a description, it lists what each one pushes. */

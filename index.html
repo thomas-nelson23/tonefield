@@ -23,7 +23,8 @@
         </div>
         <span class="tool-sep"></span>
         <div class="tool-group">
-          <button type="button" id="randomize" title="Set every parameter of this model to a random value, except the ones locked with the padlock">Randomize</button>
+          <button type="button" id="randomize" title="Roll every slider of this model to a random value in its useful band. Locked ones stay. Shift-click rolls the dropdowns, switches and rebuild sizes too.">Randomize</button>
+          <button type="button" id="nudge" title="Move every slider a little from where it is">Nudge</button>
         </div>
       </header>
       <aside id="sidebar">
@@ -35,8 +36,23 @@
             <p id="model-hint" class="muted"></p>
           </div>
         </details>
+        <details class="panel" data-panel="macros" open>
+          <summary class="panel-head">
+            <svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 12 8.5 8.5M12 4v1.5M20 12h-1.5M4 12h1.5"/></svg><span class="panel-title">Macros</span>
+            <span class="panel-note" id="macros-model"></span>
+            <button type="button" id="macros-reset" class="panel-action" title="Turn every macro back to zero">Zero</button>
+          </summary>
+          <div class="panel-body">
+            <div id="macros"></div>
+          </div>
+        </details>
         <details class="panel" data-panel="params" open>
-          <summary class="panel-head"><svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg><span class="panel-title">Parameters</span></summary>
+          <summary class="panel-head">
+            <svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg><span class="panel-title">Parameters</span>
+            <span class="panel-note">hover a control for what it does</span>
+            <button type="button" id="params-help" class="panel-action" title="Show what every control and macro does under it" aria-pressed="false">?</button>
+            <button type="button" id="params-reset" class="panel-action" title="Put every parameter of this model back to its default">Reset</button>
+          </summary>
           <div class="panel-body">
             <div id="params"></div>
           </div>
@@ -61,16 +77,6 @@
             <div id="global-controls"></div>
           </div>
         </details>
-        <details class="panel" data-panel="macros" open>
-          <summary class="panel-head">
-            <svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 12 8.5 8.5M12 4v1.5M20 12h-1.5M4 12h1.5"/></svg><span class="panel-title">Macros</span>
-            <span class="panel-note" id="macros-model"></span>
-            <button type="button" id="macros-reset" class="panel-action" title="Turn every macro back to zero">Zero</button>
-          </summary>
-          <div class="panel-body">
-            <div id="macros"></div>
-          </div>
-        </details>
       </aside>
       <main id="main">
         <div id="doc-tabs">
@@ -89,6 +95,7 @@
             <span id="dock-hint" class="dock-hint" aria-live="polite"></span>
             <button type="button" id="seq-play" class="primary">Play</button>
             <button type="button" id="seq-mute">Mute</button>
+            <button type="button" id="mod-enabled" class="bar-toggle on" title="Music is driving the visuals"><span class="led"></span>Visuals</button>
             <span id="midi-led" class="led" title="MIDI activity"></span>
           </nav>
           <div id="dock-body">
@@ -173,26 +180,28 @@
               <div class="mod-layout">
                 <div class="mod-side">
                   <div class="section-label">All models</div>
-                  <label class="check"><input id="mod-enabled" type="checkbox" /> Music drives the visuals</label>
-                  <label class="mod-global" title="Scales every route on every model. 100% is as set; 200% doubles every push.">Intensity <input id="mod-intensity" type="range" min="0" max="2" step="0.05" /> <span id="mod-intensity-readout" class="readout"></span></label>
+                  <p class="muted tab-help">How much the music moves the visuals. The Visuals switch above turns all of it off.</p>
+                  <label class="mod-global" title="Scales every built-in reaction and every route on every model. 100% is as set; 200% doubles every push.">Intensity <input id="mod-intensity" type="range" min="0" max="2" step="0.05" /> <span id="mod-intensity-readout" class="readout"></span></label>
                   <label class="mod-global" title="How long a hit keeps pushing after it lands.">Note decay <input id="mod-decay" type="range" min="0.05" max="1.5" step="0.05" /> <span id="mod-decay-readout" class="readout"></span></label>
+                  <label class="mod-global" title="How long the sound level, bass, mids and treble take to follow a change when a route reads them, so a slider on the bass doesn't flicker. The models' own reactions are not smoothed.">Smoothing <input id="mod-smooth" type="range" min="0" max="0.5" step="0.01" /> <span id="mod-smooth-readout" class="readout"></span></label>
                 </div>
                 <div class="mod-main">
                   <div class="mod-col">
                     <div class="section-label" id="mod-builtins-title">Built into this model</div>
-                    <p class="muted tab-help">What the model does with the music by itself. Hover a row to read what it does; the slider sets how strongly.</p>
-                    <div id="mod-builtins" class="mod-rows"></div>
+                    <p class="muted tab-help">What the model does with the music by itself, grouped by sound. A group's slider sets every reaction in it; open the group for each one.</p>
+                    <div id="mod-builtins" class="mod-groups"></div>
                     <div class="row-buttons">
                       <button type="button" id="mod-restore" hidden>Restore built-ins</button>
+                      <button type="button" id="mod-reset-builtins" title="Every built-in reaction back on at 100%">Reset built-ins</button>
                     </div>
                   </div>
                   <div class="mod-col">
                     <div class="section-label">Your routes</div>
-                    <p class="muted tab-help">Each route lets a sound push a slider by a share of its range. The bar shows the sound right now, and ♪ under a sidebar slider names what is pushing it.</p>
+                    <p class="muted tab-help">Each route lets a sound push a slider by a share of its range. The bar shows the sound right now; → finds the slider, and the ♪ beside any slider adds a route to it.</p>
                     <div id="mod-routes" class="mod-rows"></div>
                     <div class="row-buttons">
                       <button type="button" id="mod-add">Add route</button>
-                      <button type="button" id="mod-defaults">Reset to model defaults</button>
+                      <button type="button" id="mod-defaults" title="Back to the routes the model starts with">Reset routes</button>
                     </div>
                   </div>
                 </div>
@@ -238,7 +247,7 @@
         </section>
       </main>
       <footer id="statusbar">
-        <button type="button" id="dock-toggle" class="bar-toggle on" title="Hide the music panel"><span class="led"></span>Music</button>
+        <button type="button" id="dock-toggle" class="bar-toggle on" title="Hide the music panel; the music keeps playing"><span class="led"></span>Music panel</button>
         <span id="stats"></span>
         <label class="bar-select" title="How many pixels the picture is drawn at. Fewer pixels means more frames a second on a big screen; Auto lowers it only while the frame rate drops under 55.">Resolution <select id="render-scale"></select></label>
         <label class="bar-select" title="What draws the picture. GPU draws with WebGL on the graphics card; CPU is the older Canvas 2D drawing, kept in case the GPU way misbehaves on a machine.">Drawing <select id="draw-mode"><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>

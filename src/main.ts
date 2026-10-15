@@ -25,6 +25,9 @@ const stepBtn = $<HTMLButtonElement>("step");
 const resetBtn = $<HTMLButtonElement>("reset");
 const statsEl = $<HTMLElement>("stats");
 const randomizeBtn = $<HTMLButtonElement>("randomize");
+const nudgeBtn = $<HTMLButtonElement>("nudge");
+const paramsResetBtn = $<HTMLButtonElement>("params-reset");
+const helpBtn = $<HTMLButtonElement>("params-help");
 const docTitle = $<HTMLElement>("doc-title");
 const docState = $<HTMLElement>("doc-state");
 const scaleSelect = $<HTMLSelectElement>("render-scale");
@@ -67,6 +70,9 @@ let effective: ParamValues = {};
 let paramControls: ParamControls | null = null;
 /** Parameters of the current model that Randomize leaves alone, remembered per model. */
 let locks = new Set<string>();
+/** The one-line descriptions are shown under the controls (otherwise they are tooltips). */
+let helpShown = false;
+let paramSaveTimer = 0;
 /** What the music is doing this frame, as the model sees it. */
 let music: MusicFrame = SILENT_MUSIC;
 let view: Viewport = { width: 1, height: 1 };
@@ -184,7 +190,7 @@ function populateModelSelect(): void {
 function loadModel(id: string): void {
   def = findModel(id) ?? models[0];
   select.value = def.id;
-  params = defaultParams(def);
+  params = loadParams(def);
   effective = { ...params };
   model = def.create();
   model.reset(view, effective);
@@ -202,16 +208,72 @@ function loadModel(id: string): void {
       model.reset(view, effective);
       dirty = true;
     }
+    saveParams();
   };
   locks = loadLocks(def);
   const lockHooks: ParamLocks = { keys: locks, changed: () => saveLocks(def) };
-  const controls = (paramControls = renderParamControls(paramsEl, def.params, params, onChange, "", lockHooks));
+  const controls = (paramControls = renderParamControls(paramsEl, def.params, params, onChange, "", lockHooks, { ...studio.sliderHooks(""), help: helpShown }));
   studio.setModel(def, params, controls, onChange);
   try {
     localStorage.setItem("lastModel", def.id);
   } catch {
     // Storage can be unavailable; remembering the model is only a convenience.
   }
+}
+
+/**
+ * The model's slider values as last set, or its defaults. Anything saved
+ * that the model no longer has, or that is out of range, is dropped.
+ */
+function loadParams(d: ModelDefinition): ParamValues {
+  const values = defaultParams(d);
+  try {
+    const saved = JSON.parse(localStorage.getItem(`params:${d.id}`) ?? "null") as ParamValues | null;
+    if (!saved || typeof saved !== "object") return values;
+    for (const spec of d.params) {
+      const v = saved[spec.key];
+      if (spec.kind === "number" && typeof v === "number" && Number.isFinite(v)) values[spec.key] = Math.min(spec.max, Math.max(spec.min, v));
+      else if (spec.kind === "boolean" && typeof v === "boolean") values[spec.key] = v;
+      else if (spec.kind === "choice" && spec.options.some((o) => o.value === v)) values[spec.key] = v as string;
+    }
+  } catch {
+    // Defaults it is.
+  }
+  return values;
+}
+
+/** Save the slider values soon: a drag calls this many times a second. */
+function saveParams(): void {
+  if (paramSaveTimer) return;
+  paramSaveTimer = window.setTimeout(() => {
+    paramSaveTimer = 0;
+    try {
+      const defaults = defaultParams(def);
+      const changed = Object.keys(params).some((k) => params[k] !== defaults[k]);
+      if (changed) localStorage.setItem(`params:${def.id}`, JSON.stringify(params));
+      else localStorage.removeItem(`params:${def.id}`);
+    } catch {
+      // Only a convenience.
+    }
+  }, 300);
+}
+
+/** Put every parameter of the model back to its default. */
+function resetParams(): void {
+  const defaults = defaultParams(def);
+  let rebuild = false;
+  for (const spec of def.params) {
+    if (spec.kind === "widget" || params[spec.key] === defaults[spec.key]) continue;
+    params[spec.key] = defaults[spec.key];
+    if (spec.resetOnChange) rebuild = true;
+  }
+  paramControls?.refresh();
+  if (rebuild) {
+    effective = { ...params };
+    model.reset(view, effective);
+    dirty = true;
+  }
+  saveParams();
 }
 
 function loadLocks(d: ModelDefinition): Set<string> {
@@ -233,20 +295,24 @@ function saveLocks(d: ModelDefinition): void {
 }
 
 /**
- * Give every unlocked parameter of the model a random value. Setup sizes (particle and
- * bird counts, grains and so on) stay between their minimum and half again
- * their default, so a roll never stalls the frame rate.
+ * Give every unlocked slider of the model a random value inside its `random`
+ * band (its whole range when it has none). Dropdowns, switches and the
+ * rebuild controls (counts, resolution and so on) are left alone unless
+ * `everything` is set, when the rebuild sizes stay between their minimum and
+ * half again their default so a roll never stalls the frame rate.
  */
-function randomizeParams(): void {
+function randomizeParams(everything: boolean): void {
   let rebuild = false;
   for (const spec of def.params) {
-    // The global controls set these.
-    if (spec.hidden || locks.has(spec.key)) continue;
+    // The global controls and the matrix set these.
+    if (spec.kind === "widget" || spec.hidden || locks.has(spec.key)) continue;
+    if (!everything && (spec.kind !== "number" || spec.resetOnChange)) continue;
     const before = params[spec.key];
     if (spec.kind === "number") {
-      const max = spec.resetOnChange ? Math.min(spec.max, Math.max(spec.min + spec.step, (spec.default as number) * 1.5)) : spec.max;
-      const steps = Math.floor((max - spec.min) / spec.step + 1e-9);
-      params[spec.key] = Number((spec.min + Math.round(Math.random() * steps) * spec.step).toFixed(6));
+      const [lo, hi] = spec.resetOnChange
+        ? [spec.min, Math.min(spec.max, Math.max(spec.min + spec.step, spec.default * 1.5))]
+        : spec.random ?? [spec.min, spec.max];
+      params[spec.key] = randomStep(lo, hi, spec.step);
     } else if (spec.kind === "choice") {
       params[spec.key] = spec.options[Math.floor(Math.random() * spec.options.length)].value;
     } else {
@@ -262,6 +328,25 @@ function randomizeParams(): void {
     model.reset(view, effective);
     dirty = true;
   }
+  saveParams();
+}
+
+/** Move every unlocked slider a little from where it is, so the picture shifts without starting over. */
+function nudgeParams(): void {
+  for (const spec of def.params) {
+    if (spec.kind !== "number" || spec.hidden || spec.resetOnChange || locks.has(spec.key)) continue;
+    const [lo, hi] = spec.random ?? [spec.min, spec.max];
+    const v = (params[spec.key] as number) + (Math.random() - 0.5) * 0.2 * (hi - lo);
+    params[spec.key] = randomStep(Math.max(spec.min, Math.min(v, spec.max)), Math.max(spec.min, Math.min(v, spec.max)), spec.step);
+  }
+  paramControls?.refresh();
+  saveParams();
+}
+
+/** A random value from `lo` to `hi` on the spec's step. */
+function randomStep(lo: number, hi: number, step: number): number {
+  const steps = Math.floor((hi - lo) / step + 1e-9);
+  return Number((lo + Math.round(Math.random() * steps) * step).toFixed(6));
 }
 
 // ---- Canvas sizing ---------------------------------------------------------
@@ -416,9 +501,30 @@ drawSelect.addEventListener("change", () => {
   drawSelect.blur();
 });
 select.addEventListener("change", () => loadModel(select.value));
-randomizeBtn.addEventListener("click", () => {
-  randomizeParams();
+randomizeBtn.addEventListener("click", (e) => {
+  randomizeParams(e.shiftKey);
   randomizeBtn.blur();
+});
+nudgeBtn.addEventListener("click", () => {
+  nudgeParams();
+  nudgeBtn.blur();
+});
+paramsResetBtn.addEventListener("click", () => {
+  resetParams();
+  paramsResetBtn.blur();
+});
+helpBtn.addEventListener("click", () => {
+  helpShown = !helpShown;
+  helpBtn.classList.toggle("on", helpShown);
+  helpBtn.setAttribute("aria-pressed", String(helpShown));
+  paramControls?.setHelp(helpShown);
+  studio.setHelp(helpShown);
+  try {
+    localStorage.setItem("ui:showHelp", helpShown ? "1" : "0");
+  } catch {
+    // Only a convenience.
+  }
+  helpBtn.blur();
 });
 
 window.addEventListener("keydown", (e) => {
@@ -538,6 +644,14 @@ for (const [value, label] of Object.entries(SCALE_LABELS)) {
   drawSelect.value = mode;
 }
 resize();
+try {
+  helpShown = localStorage.getItem("ui:showHelp") === "1";
+} catch {
+  // Tooltips it is.
+}
+helpBtn.classList.toggle("on", helpShown);
+helpBtn.setAttribute("aria-pressed", String(helpShown));
+studio.setHelp(helpShown);
 let initial = models[0].id;
 try {
   initial = localStorage.getItem("lastModel") ?? initial;

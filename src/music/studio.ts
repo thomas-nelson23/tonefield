@@ -1,12 +1,12 @@
 import { SILENT_MUSIC, type ModRoute, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamSpec, type ParamValues, type ReactionSource } from "../models/types";
 import { noteHue } from "../models/lib/music";
-import { paintRange, renderParamControls, type ParamControls } from "../ui/controls";
+import { paintRange, renderParamControls, type ControlOptions, type ParamControls } from "../ui/controls";
 import type { Grade } from "../ui/grade";
 import { knob, fader, type Dial } from "../ui/knob";
 import { segmented } from "../ui/segmented";
 import { AudioEngine, BeatDetector, type DrumKind, type SynthTrack, type TrackKey } from "./audio";
 import { dispatchMidi, openMidi, type MidiInputs } from "./midi";
-import { applyModulation, macroSpecs, modulatable, ModSources, SOURCES, sourceLabel, type NumberSpec } from "./modulation";
+import { applyModulation, applyReactions, macroSpecs, modulatable, ModSources, SOURCES, sourceLabel, type NumberSpec } from "./modulation";
 import {
   BUILT_IN_PRESETS, GLOBAL_SPECS, applyEnergy, defaultGlobals, gradeOf, matchesPreset, presetValues, sanitizeGlobals, setHidden,
   type GlobalPreset,
@@ -23,6 +23,8 @@ interface GlobalSettings {
   seq: SequencerState;
   thru: boolean;
   decay: number;
+  /** Seconds the audio bands take to follow a change when a route reads them. */
+  smoothing: number;
   inputs: string[];
   /** CC number -> target: `macro#<slot>` (any model), `glob#<key>`, `gen#<key>` or `<modelId>/<paramKey>`. */
   bindings: Record<string, string>;
@@ -302,6 +304,30 @@ const REACTION_METERS: Record<ReactionSource, string> = {
   level: "level", bass: "bass", mid: "mid", treble: "treble", spectrum: "level", beat: "lfoBeat",
 };
 
+/** How the matrix groups a model's built-in reactions: by the kind of sound each listens to. */
+const REACTION_GROUPS: { name: string; text: string; sources: ReactionSource[] }[] = [
+  { name: "Drums", text: "What kicks, snares and hi-hats do", sources: ["kick", "snare", "hat"] },
+  { name: "Melody and chords", text: "What melody notes, bass notes and chords do", sources: ["tone", "bassline", "chord"] },
+  { name: "Loudness", text: "What the sound's level, bands, spectrum and the beat do", sources: ["level", "bass", "mid", "treble", "spectrum", "beat"] },
+];
+
+/** The built-in groups the user has unfolded, remembered across models and launches. */
+function loadOpenGroups(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem("ui:modGroups") ?? "[]") as string[]);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveOpenGroups(set: Set<string>): void {
+  try {
+    localStorage.setItem("ui:modGroups", JSON.stringify([...set]));
+  } catch {
+    // Only a convenience.
+  }
+}
+
 /** Show a 0..1 level on a horizontal meter, touching the DOM only when it moves a visible step. */
 const meterLevels = new WeakMap<HTMLElement, number>();
 function setMeter(bar: HTMLElement, level: number): void {
@@ -401,7 +427,7 @@ export class Studio {
     if (typeof saved.volume === "number" && saved.seq && !("masterVolume" in saved.seq)) seq.masterVolume = saved.volume;
     delete saved.volume;
     this.settings = {
-      thru: true, decay: 0.25, inputs: [], bindings: {}, dockHidden: false, musicOn: true, intensity: 1, mixerTrack: "drums", drumVoice: "kick",
+      thru: true, decay: 0.25, smoothing: 0.08, inputs: [], bindings: {}, dockHidden: false, musicOn: true, intensity: 1, mixerTrack: "drums", drumVoice: "kick",
       ...saved,
       seq,
       globals: sanitizeGlobals(saved.globals),
@@ -413,6 +439,7 @@ export class Studio {
     this.audio.mix(this.seq.mixSettings());
     for (const t of SYNTH_TRACKS) this.audio.patch(t, this.seq.patch(t));
     this.sources.decay = this.settings.decay;
+    this.sources.smoothing = this.settings.smoothing;
     this.buildDock();
     void this.initMidi();
   }
@@ -440,6 +467,7 @@ export class Studio {
   /** Called when the host loads a model. `base` is the slider-bound values object. */
   setModel(def: ModelDefinition, base: ParamValues, controls: ParamControls, onBaseChanged: (spec: ParamSpec) => void): void {
     this.def = def;
+    this.rowFlash = null;
     this.base = base;
     this.paramControls = controls;
     this.onBaseChanged = onBaseChanged;
@@ -470,19 +498,88 @@ export class Studio {
   private renderMacros(): void {
     const macros = this.def?.macros ?? [];
     $("macros-model").textContent = this.def ? `only in ${this.def.name}` : "";
-    this.macroControls = renderParamControls($("macros"), macroSpecs(macros, this.def?.params ?? []), this.modelSettings.macros, () => this.saveModel(), "macro:");
+    this.macroControls = renderParamControls($("macros"), macroSpecs(macros, this.def?.params ?? []), this.modelSettings.macros, () => this.saveModel(), "macro:", undefined, { ...this.sliderHooks("macro:"), help: this.helpShown });
     if (macros.length === 0) $("macros").append(el("p", { className: "muted", textContent: "This model has no macros." }));
   }
 
-  /** Everything a route can push: macros first, then number parameters, then the global controls. */
-  private targets(): { id: string; label: string }[] {
+  private helpShown = false;
+
+  /** Show or hide what each macro does under its slider (the Parameters panel's ? covers both). */
+  setHelp(on: boolean): void {
+    this.helpShown = on;
+    this.macroControls?.setHelp(on);
+  }
+
+  /** The ♪ button and badge on a panel's sliders: add a route to one, or show the routes pushing it. */
+  sliderHooks(prefix: "" | "macro:" | "global:"): ControlOptions {
+    return {
+      addRoute: (key) => this.addRouteTo(prefix + key),
+      showRouteOf: (key) => this.showRoutesTo(prefix + key),
+    };
+  }
+
+  /** Everything a route can push: macros first, then number parameters, then the global controls, each its own group. */
+  private targets(): { id: string; label: string; group: string }[] {
     if (!this.def) return [];
     return [
-      ...(this.def.macros ?? []).map((m) => ({ id: `macro:${m.key}`, label: `Macro: ${m.label}` })),
-      ...modulatable(this.def).map((p) => ({ id: p.key, label: p.label })),
-      ...GLOBAL_NUMBERS.map((p) => ({ id: `global:${p.key}`, label: `Global: ${p.label}` })),
+      ...(this.def.macros ?? []).map((m) => ({ id: `macro:${m.key}`, label: m.label, group: "Macros" })),
+      ...modulatable(this.def).map((p) => ({ id: p.key, label: p.label, group: this.def!.name })),
+      ...GLOBAL_NUMBERS.map((p) => ({ id: `global:${p.key}`, label: p.label, group: "Global controls" })),
     ];
   }
+
+  /**
+   * Add a route to a slider from the ♪ button beside it, with a source that
+   * suits what the slider does, and show it in the matrix.
+   */
+  private addRouteTo(target: string): void {
+    if (!this.targets().some((t) => t.id === target)) return;
+    const used = new Set(this.modelSettings.routes.filter((r) => r.target === target).map((r) => r.source));
+    const key = target.replace(/^(macro|global):/, "").toLowerCase();
+    // Sizes and glows follow the bass, colours the melody, motion the kick; LFOs for the rest.
+    const wants = /size|width|bright|glow|grain|dot|thick|reach|scale/.test(key) ? ["bass", "level", "lfoBar"]
+      : /colour|hue|spread|shift/.test(key) ? ["tone", "chord", "lfoBar"]
+      : /speed|spin|drift|wind|turn|rotation|snap|bounce|scatter|burst|punch/.test(key) ? ["kick", "snare", "level"]
+      : ["lfoBar", "kick", "tone"];
+    const source = [...wants, "kick", "snare", "hat", "tone", "bass", "lfoBeat"].find((id) => !used.has(id)) ?? "kick";
+    this.modelSettings.routes.push({ source, target, amount: 0.3 });
+    this.routesChanged();
+    this.renderRoutes();
+    this.showRoutesTo(target);
+  }
+
+  /** Open the Modulation tab and flash the routes that push a target. */
+  private showRoutesTo(target: string): void {
+    this.showTab("modulation");
+    this.rowFlash = target;
+    for (const row of document.querySelectorAll<HTMLElement>("#mod-routes .route")) {
+      const hit = row.dataset.target === target;
+      row.classList.toggle("flash", hit);
+      if (hit) row.scrollIntoView({ block: "nearest" });
+    }
+    window.setTimeout(() => document.querySelectorAll(".route.flash").forEach((r) => r.classList.remove("flash")), 1600);
+  }
+
+  /** Scroll the sidebar to a route's target and flash it, so a route can be found from the matrix. */
+  private locateTarget(target: string): void {
+    const row = document.querySelector<HTMLElement>(`#sidebar .param[data-target="${CSS.escape(target.replace(/^global:/, "glob:"))}"]`);
+    if (!row) return;
+    // Unfold the panel and the group it sits in.
+    for (const d of [row.closest<HTMLDetailsElement>(".param-group"), row.closest<HTMLDetailsElement>(".panel")]) if (d) d.open = true;
+    row.scrollIntoView({ block: "center" });
+    row.classList.add("flash");
+    window.setTimeout(() => row.classList.remove("flash"), 1600);
+  }
+
+  /** Show one of the dock's tabs, unfolding the dock if it is hidden. */
+  private showTab(name: string): void {
+    const tabs = document.querySelectorAll<HTMLButtonElement>("#dock-tabs [data-tab]");
+    tabs.forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+    document.querySelectorAll<HTMLElement>("#dock-body .tab").forEach((p) => (p.hidden = p.dataset.tab !== name));
+    if ($("dock").classList.contains("collapsed")) this.setDockHidden(false);
+  }
+
+  private rowFlash: string | null = null;
 
   /** What the global colour controls do to the finished picture. */
   grade(): Grade {
@@ -541,16 +638,17 @@ export class Studio {
     const depth = this.settings.musicOn ? this.settings.intensity : 0;
     const val = (r: ReactionSource, v: number) => v * depth * this.reaction(r);
     const src = this.sources;
-    f.kick = val("kick", src.get("kick"));
-    f.snare = val("snare", src.get("snare"));
-    f.hat = val("hat", src.get("hat"));
-    f.tone = val("tone", src.get("tone"));
-    f.bassline = val("bassline", src.get("bassline"));
-    f.chord = val("chord", src.get("chord"));
-    f.level = val("level", src.get("level"));
-    f.bass = val("bass", src.get("bass"));
-    f.mid = val("mid", src.get("mid"));
-    f.treble = val("treble", src.get("treble"));
+    f.kick = val("kick", src.raw("kick"));
+    f.snare = val("snare", src.raw("snare"));
+    f.hat = val("hat", src.raw("hat"));
+    f.tone = val("tone", src.raw("tone"));
+    f.bassline = val("bassline", src.raw("bassline"));
+    f.chord = val("chord", src.raw("chord"));
+    // The models read the bands as they are; only routes get the smoothed ones.
+    f.level = val("level", src.raw("level"));
+    f.bass = val("bass", src.raw("bass"));
+    f.mid = val("mid", src.raw("mid"));
+    f.treble = val("treble", src.raw("treble"));
     const shape = depth * this.reaction("spectrum");
     for (let i = 0; i < f.spectrum.length; i++) f.spectrum[i] = this.audio.spectrum[i] * shape;
     for (let i = 0; i < f.wave.length; i++) f.wave[i] = this.audio.scope[i] * shape;
@@ -602,6 +700,8 @@ export class Studio {
     // The global controls stand in for the sliders of the model's hidden
     // parameters, then macros and routes push on top, then Energy scales.
     setHidden(this.def, g, this.base);
+    // The matrix's built-in rows stand in for the sliders the models' music reactions used to have.
+    applyReactions(this.def, (src) => this.reaction(src as ReactionSource), this.base);
     applyModulation(this.def, this.base, this.modelSettings.macros, this.modelSettings.routes, this.sources, out, this.macroOut, depth);
     applyEnergy(this.def, g, out);
     if (this.uiDue) {
@@ -801,13 +901,8 @@ export class Studio {
 
   private buildDock(): void {
     const s = this.settings;
-    const tabs = document.querySelectorAll<HTMLButtonElement>("#dock-tabs [data-tab]");
-    for (const t of tabs) {
-      t.addEventListener("click", () => {
-        tabs.forEach((b) => b.classList.toggle("active", b === t));
-        document.querySelectorAll<HTMLElement>("#dock-body .tab").forEach((p) => (p.hidden = p.dataset.tab !== t.dataset.tab));
-        if ($("dock").classList.contains("collapsed")) this.setDockHidden(false);
-      });
+    for (const t of document.querySelectorAll<HTMLButtonElement>("#dock-tabs [data-tab]")) {
+      t.addEventListener("click", () => this.showTab(t.dataset.tab!));
     }
     $("dock-toggle").addEventListener("click", () => this.setDockHidden(!$("dock").classList.contains("collapsed")));
     this.setDockHidden(s.dockHidden);
@@ -847,10 +942,25 @@ export class Studio {
     });
     $("mod-defaults").addEventListener("click", () => {
       if (!this.def) return;
-      this.modelSettings = this.defaultModelSettings(this.def);
+      this.modelSettings.routes = (this.def.modulations ?? []).map((r) => ({ ...r }));
       this.saveModel();
-      this.renderMacros();
       this.renderRoutes();
+    });
+    $("mod-reset-builtins").addEventListener("click", () => {
+      if (!this.def) return;
+      this.modelSettings.reactions = defaultReactions(this.def);
+      this.saveModel();
+      this.renderRoutes();
+    });
+    const smooth = $<HTMLInputElement>("mod-smooth");
+    const smoothOut = $("mod-smooth-readout");
+    const showSmooth = () => (smoothOut.textContent = s.smoothing === 0 ? "off" : `${Math.round(s.smoothing * 1000)} ms`);
+    smooth.value = String(s.smoothing);
+    showSmooth();
+    smooth.addEventListener("input", () => {
+      s.smoothing = this.sources.smoothing = Number(smooth.value);
+      showSmooth();
+      this.saveGlobal();
     });
     const decay = $<HTMLInputElement>("mod-decay");
     const decayOut = $("mod-decay-readout");
@@ -870,14 +980,19 @@ export class Studio {
       intensityOut.textContent = `${Math.round(s.intensity * 100)}%`;
       this.saveGlobal();
     });
-    const enabled = $<HTMLInputElement>("mod-enabled");
-    enabled.checked = s.musicOn;
-    enabled.addEventListener("change", () => {
-      s.musicOn = enabled.checked;
+    const enabled = $<HTMLButtonElement>("mod-enabled");
+    const showEnabled = () => {
+      enabled.classList.toggle("on", s.musicOn);
+      enabled.title = s.musicOn ? "Music is driving the visuals. Click to stop it: the matrix and the models' reactions go quiet." : "Music is not driving the visuals. Click to let it.";
       document.querySelector(".mod-layout")?.classList.toggle("bypassed", !s.musicOn);
+    };
+    enabled.addEventListener("click", () => {
+      s.musicOn = !s.musicOn;
+      showEnabled();
       this.saveGlobal();
+      enabled.blur();
     });
-    document.querySelector(".mod-layout")?.classList.toggle("bypassed", !s.musicOn);
+    showEnabled();
 
     // MIDI
     $("midi-refresh").addEventListener("click", () => void this.refreshInputs());
@@ -927,7 +1042,7 @@ export class Studio {
 
   private renderGlobals(): void {
     const box = $("global-controls");
-    this.globalControls = renderParamControls(box, GLOBAL_SPECS, this.settings.globals, () => this.globalsChanged(), "glob:");
+    this.globalControls = renderParamControls(box, GLOBAL_SPECS, this.settings.globals, () => this.globalsChanged(), "glob:", undefined, this.sliderHooks("global:"));
     // The panel is short, so descriptions show as tooltips here instead of under each control.
     for (const row of box.querySelectorAll<HTMLElement>(".param[data-target]")) {
       row.title = GLOBAL_SPECS.find((p) => `glob:${p.key}` === row.dataset.target)?.description ?? "";
@@ -1024,7 +1139,7 @@ export class Studio {
   private setDockHidden(hidden: boolean): void {
     $("dock").classList.toggle("collapsed", hidden);
     $("dock-toggle").classList.toggle("on", !hidden);
-    $("dock-toggle").title = hidden ? "Show the music panel" : "Hide the music panel";
+    $("dock-toggle").title = hidden ? "Show the music panel (Enter plays the sequencer either way)" : "Hide the music panel; the music keeps playing";
     if (this.settings.dockHidden !== hidden) {
       this.settings.dockHidden = hidden;
       this.saveGlobal();
@@ -1952,13 +2067,16 @@ export class Studio {
     box.replaceChildren();
     const targets = this.targets();
     if (this.modelSettings.routes.length === 0) {
-      box.append(el("p", { className: "muted", textContent: "No routes. Add one to let a sound or controller push a slider." }));
+      box.append(el("p", { className: "muted", textContent: "No routes. Add one here, or with the ♪ button beside any slider." }));
     }
+    // The MIDI sources only clutter the menu until a controller is connected or one is already in use.
+    const midiShown = this.settings.inputs.length > 0 || this.modelSettings.routes.some((r) => r.source.startsWith("cc:") || r.source === "modwheel" || r.source === "pitchbend");
     this.modelSettings.routes.forEach((route, i) => {
       const on = el("input", { type: "checkbox", checked: !route.off, title: "Switch this route on or off" });
       const source = el("select");
       const groups = new Map<string, HTMLOptGroupElement>();
       for (const s of SOURCES) {
+        if (s.group === "MIDI" && !midiShown) continue;
         let g = groups.get(s.group);
         if (!g) {
           g = el("optgroup", { label: s.group });
@@ -1967,10 +2085,10 @@ export class Studio {
         }
         g.append(el("option", { value: s.id, textContent: s.label }));
       }
-      const ccGroup = groups.get("MIDI")!;
-      for (const n of this.sources.ccList()) ccGroup.append(el("option", { value: `cc:${n}`, textContent: `CC ${n}` }));
+      const ccGroup = groups.get("MIDI");
+      if (ccGroup) for (const n of this.sources.ccList()) ccGroup.append(el("option", { value: `cc:${n}`, textContent: `CC ${n}` }));
       if (![...source.options].some((o) => o.value === route.source)) {
-        ccGroup.append(el("option", { value: route.source, textContent: sourceLabel(route.source) }));
+        (ccGroup ?? source).append(el("option", { value: route.source, textContent: sourceLabel(route.source) }));
       }
       source.value = route.source;
       source.addEventListener("change", () => { route.source = source.value; this.routesChanged(); source.blur(); });
@@ -1979,10 +2097,29 @@ export class Studio {
       this.sourceMeters.push({ bar: meterFill, source: () => route.source });
       const meter = el("div", { className: "meter-track", title: "What this sound is doing right now" }, meterFill);
 
+      // The arrow finds the slider in the sidebar.
+      const locate = el("button", { type: "button", className: "small locate", textContent: "→", title: "Show this slider in the sidebar" });
+      locate.addEventListener("click", () => { this.locateTarget(route.target); locate.blur(); });
+
       const target = el("select");
-      for (const t of targets) target.append(el("option", { value: t.id, textContent: t.label }));
+      const targetGroups = new Map<string, HTMLOptGroupElement>();
+      for (const t of targets) {
+        let g = targetGroups.get(t.group);
+        if (!g) {
+          g = el("optgroup", { label: t.group });
+          targetGroups.set(t.group, g);
+          target.append(g);
+        }
+        g.append(el("option", { value: t.id, textContent: t.label }));
+      }
       target.value = route.target;
-      target.addEventListener("change", () => { route.target = target.value; this.routesChanged(); target.blur(); });
+      target.addEventListener("change", () => {
+        route.target = target.value;
+        row.dataset.target = route.target;
+        this.routesChanged();
+        target.blur();
+        this.locateTarget(route.target);
+      });
 
       const amount = el("input", { type: "range", min: "-1", max: "1", step: "0.05", value: String(route.amount), title: "How far it pushes, as a share of the slider's range. Double-click to zero." });
       const readout = el("span", { className: "readout", textContent: formatAmount(route.amount) });
@@ -2014,7 +2151,8 @@ export class Studio {
         this.routesChanged();
         this.renderRoutes();
       });
-      const row = el("div", { className: `route${route.off ? " off" : ""}` }, on, source, meter, el("span", { className: "muted", textContent: "→" }), target, amount, readout, roll, remove);
+      const row = el("div", { className: `route${route.off ? " off" : ""}${this.rowFlash === route.target ? " flash" : ""}` }, on, source, meter, locate, target, amount, readout, roll, remove);
+      row.dataset.target = route.target;
       on.addEventListener("change", () => {
         route.off = !on.checked || undefined;
         row.classList.toggle("off", !on.checked);
@@ -2031,8 +2169,9 @@ export class Studio {
   }
 
   /**
-   * The model's built-in reactions, as matrix rows: the sound it listens to,
-   * what it does, and how strongly, each one switchable and deletable.
+   * The model's built-in reactions, as matrix rows grouped by the kind of
+   * sound they listen to. Each group folds to one strength slider that sets
+   * every row in it; unfolded, each row has its own strength, switch and ×.
    */
   private renderReactions(): void {
     const box = $("mod-builtins");
@@ -2043,46 +2182,83 @@ export class Studio {
       box.append(el("p", { className: "muted", textContent: "This model doesn't react to music by itself; routes are how music reaches it." }));
     }
     const rows = this.modelSettings.reactions;
-    for (const row of rows) {
-      const spec = all.find((r) => r.source === row.source);
-      if (!spec) continue;
-      const on = el("input", { type: "checkbox", checked: !row.off, title: "Switch this reaction on or off" });
-      const source = el("span", { className: "fixed", textContent: REACTION_LABELS[row.source], title: `Built into ${this.def!.name}: always listens to this sound` });
-      const meterFill = el("div", { className: "meter-fill" });
-      this.sourceMeters.push({ bar: meterFill, source: () => REACTION_METERS[row.source] });
-      const meter = el("div", { className: "meter-track", title: "What this sound is doing right now" }, meterFill);
-      const target = el("span", { className: "fixed builtin", title: spec.text }, el("span", { className: "tag", textContent: "Built-in" }), spec.label);
-      const amount = el("input", { type: "range", min: "0", max: "2", step: "0.05", value: String(row.amount), title: "How strongly the model reacts. 100% is as designed. Double-click for 100%." });
-      paintRange(amount);
-      const readout = el("span", { className: "readout", textContent: pct(row.amount) });
-      const setAmount = (v: number) => {
-        row.amount = v;
-        readout.textContent = pct(v);
-        paintRange(amount);
+    const open = loadOpenGroups();
+    for (const group of REACTION_GROUPS) {
+      const inGroup = rows.filter((r) => group.sources.includes(r.source) && all.some((a) => a.source === r.source));
+      if (inGroup.length === 0) continue;
+      const details = el("details", { className: "mod-group", open: open.has(group.name) });
+      const summary = el("summary");
+      const name = el("span", { className: "mod-group-name", textContent: group.name, title: `${group.text}. Click to see each reaction.` });
+      const master = el("input", { type: "range", min: "0", max: "2", step: "0.05", title: `How strongly ${this.def?.name ?? "the model"} reacts to ${group.name.toLowerCase()}: sets every reaction in the group. Double-click for 100%.` });
+      const masterOut = el("span", { className: "readout" });
+      const strengths: ((v: number) => void)[] = [];
+      const showMaster = () => {
+        const on = inGroup.filter((r) => !r.off);
+        const amounts = on.map((r) => r.amount);
+        const same = amounts.every((a) => Math.abs(a - amounts[0]) < 0.001);
+        const mean = amounts.length ? amounts.reduce((a, b) => a + b, 0) / amounts.length : 0;
+        master.value = String(mean);
+        paintRange(master);
+        masterOut.textContent = on.length === 0 ? "off" : same ? pct(amounts[0]) : `~${pct(mean)}`;
+        summary.classList.toggle("off", on.length === 0);
+      };
+      const setAll = (v: number) => {
+        for (const r of inGroup) r.amount = v;
+        strengths.forEach((f) => f(v));
+        showMaster();
         this.saveModel();
       };
-      amount.addEventListener("input", () => setAmount(Number(amount.value)));
-      amount.addEventListener("dblclick", () => { amount.value = "1"; setAmount(1); });
-      const roll = diceButton("Roll a random strength for this reaction");
-      roll.addEventListener("click", () => {
-        const v = randomStep(0.25, 2, 0.05);
-        amount.value = String(v);
-        setAmount(v);
-        roll.blur();
+      master.addEventListener("input", () => setAll(Number(master.value)));
+      master.addEventListener("dblclick", () => setAll(1));
+      // The slider sits in the summary, so dragging it must not fold the group.
+      for (const ev of ["click", "pointerdown"] as const) master.addEventListener(ev, (e) => e.stopPropagation());
+      summary.append(name, master, masterOut);
+      details.append(summary);
+      details.addEventListener("toggle", () => {
+        if (details.open) open.add(group.name);
+        else open.delete(group.name);
+        saveOpenGroups(open);
       });
-      const remove = el("button", { type: "button", textContent: "×", className: "small", title: "Remove this reaction (Restore built-ins brings it back)" });
-      remove.addEventListener("click", () => {
-        rows.splice(rows.indexOf(row), 1);
-        this.saveModel();
-        this.renderRoutes();
-      });
-      const r = el("div", { className: `route reaction-row${row.off ? " off" : ""}`, title: spec.text }, on, source, meter, el("span", { className: "muted", textContent: "→" }), target, amount, readout, roll, remove);
-      on.addEventListener("change", () => {
-        row.off = !on.checked || undefined;
-        r.classList.toggle("off", !on.checked);
-        this.saveModel();
-      });
-      box.append(r);
+      const body = el("div", { className: "mod-rows" });
+      for (const row of inGroup) {
+        const spec = all.find((r) => r.source === row.source)!;
+        const on = el("input", { type: "checkbox", checked: !row.off, title: "Switch this reaction on or off" });
+        const source = el("span", { className: "fixed", textContent: REACTION_LABELS[row.source], title: `Always listens to this sound` });
+        const meterFill = el("div", { className: "meter-fill" });
+        this.sourceMeters.push({ bar: meterFill, source: () => REACTION_METERS[row.source] });
+        const meter = el("div", { className: "meter-track", title: "What this sound is doing right now" }, meterFill);
+        const target = el("span", { className: "fixed builtin", title: spec.text, textContent: spec.label });
+        const amount = el("input", { type: "range", min: "0", max: "2", step: "0.05", value: String(row.amount), title: "How strongly the model reacts. 100% is as designed. Double-click for 100%." });
+        paintRange(amount);
+        const readout = el("span", { className: "readout", textContent: pct(row.amount) });
+        const setAmount = (v: number) => {
+          row.amount = v;
+          readout.textContent = pct(v);
+          paintRange(amount);
+          showMaster();
+          this.saveModel();
+        };
+        strengths.push((v) => { amount.value = String(v); readout.textContent = pct(v); paintRange(amount); });
+        amount.addEventListener("input", () => setAmount(Number(amount.value)));
+        amount.addEventListener("dblclick", () => { amount.value = "1"; setAmount(1); });
+        const remove = el("button", { type: "button", textContent: "×", className: "small", title: "Remove this reaction (Restore built-ins brings it back)" });
+        remove.addEventListener("click", () => {
+          rows.splice(rows.indexOf(row), 1);
+          this.saveModel();
+          this.renderRoutes();
+        });
+        const r = el("div", { className: `route reaction-row${row.off ? " off" : ""}`, title: spec.text }, on, source, meter, el("span", { className: "muted", textContent: "→" }), target, amount, readout, remove);
+        on.addEventListener("change", () => {
+          row.off = !on.checked || undefined;
+          r.classList.toggle("off", !on.checked);
+          showMaster();
+          this.saveModel();
+        });
+        body.append(r);
+      }
+      showMaster();
+      details.append(body);
+      box.append(details);
     }
     const missing = all.length - rows.length;
     const restore = $("mod-restore");
@@ -2126,6 +2302,7 @@ function knobValue(spec: ParamSpec, v: number): number | boolean | string {
     return Math.min(spec.max, Math.max(spec.min, Math.round(raw / spec.step) * spec.step));
   }
   if (spec.kind === "boolean") return v >= 0.5;
+  if (spec.kind === "widget") return 0;
   return spec.options[Math.min(spec.options.length - 1, Math.floor(v * spec.options.length))].value;
 }
 

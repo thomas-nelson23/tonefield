@@ -21,8 +21,22 @@ interface ParamCommon {
    * groups first appear.
    */
   group?: string;
+  /**
+   * A fine control: listed under a folded "More" heading after the primary
+   * ones, so a model's panel opens on the five to seven controls that change
+   * the picture most.
+   */
+  advanced?: boolean;
+  /**
+   * Only show the control while this is true of the current values, e.g. a
+   * slider that only matters for one choice of a dropdown. The parameter
+   * keeps its value and macros and routes still push it while hidden.
+   */
+  showWhen?: (params: ParamValues) => boolean;
   /** Re-run `reset` when this parameter changes (e.g. particle count). */
   resetOnChange?: boolean;
+  /** The slider has a frame-rate cost; it is marked as such. */
+  perf?: boolean;
   /**
    * Which Global Control drives this number parameter. "energy": the global
    * Energy multiplies it on top of its slider. "gravity": it is the model's
@@ -31,10 +45,11 @@ interface ParamCommon {
    */
   global?: "gravity" | "energy";
   /**
-   * No control shows for it, because a Global Control covers it: the model
-   * keeps the value at its default, or the global sets it (gravity strength,
-   * and the keys `gravityMode`, `colours`, `afterglow`, `zoom` and `spin`).
-   * Macros can still push it.
+   * No control shows for it, because a Global Control or a built-in reaction
+   * row in the modulation matrix covers it: the model keeps the value at its
+   * default, or the global or the row's strength sets it (gravity strength,
+   * the keys `gravityMode`, `colours`, `afterglow`, `zoom` and `spin`, and
+   * any parameter a `reactions` entry names). Macros can still push it.
    */
   hidden?: boolean;
 }
@@ -47,8 +62,20 @@ export type ParamSpec = ParamCommon &
       max: number;
       step: number;
       default: number;
-      /** Optional readout text, e.g. "1 bar" instead of the number. */
-      format?: (value: number) => string;
+      /** Optional readout text, e.g. "1 bar" instead of the number; it also sees the other values. */
+      format?: (value: number, params?: ParamValues) => string;
+      /**
+       * Shapes the slider: the value is `min + (max - min) * position^curve`,
+       * so a curve above 1 gives the low end most of the track. Pick it so the
+       * default sits near the middle; `curveFor` works it out.
+       */
+      curve?: number;
+      /** The band Randomize rolls inside; the whole range when left out. */
+      random?: [number, number];
+      /** The slider sticks at zero, for ranges that run both ways. */
+      snapZero?: boolean;
+      /** A label that depends on other values, e.g. what "Shape" means for the chosen pattern. */
+      labelFor?: (params: ParamValues) => string;
     }
   | {
       kind: "boolean";
@@ -59,8 +86,28 @@ export type ParamSpec = ParamCommon &
       kind: "choice";
       options: { value: string; label: string }[];
       default: string;
+      /** Draw the options as a row of buttons instead of a dropdown; for up to about six short names. */
+      segmented?: boolean;
+    }
+  | {
+      /**
+       * A control drawn for other parameters: an XY pad that moves two number
+       * parameters at once, or Fabric's anchor picture that sets its four
+       * sides. The parameters it names get no control of their own unless
+       * they are `advanced`.
+       */
+      kind: "widget";
+      widget: "pad" | "anchors";
+      keys: string[];
     }
   );
+
+/** The slider curve that puts `value` at the middle of a slider from `min` to `max`. */
+export function curveFor(min: number, max: number, value: number): number {
+  const frac = (value - min) / (max - min);
+  if (frac <= 0 || frac >= 1) return 1;
+  return Math.log(frac) / Math.log(0.5);
+}
 
 export type ParamValues = Record<string, number | boolean | string>;
 
@@ -252,7 +299,17 @@ export interface ModelDefinition {
    * those notes and that part of the `MusicFrame`; off or deleted, the notes
    * don't reach `onNote` and that part of the frame is zero.
    */
-  reactions?: { source: ReactionSource; label: string; text: string }[];
+  reactions?: {
+    source: ReactionSource;
+    label: string;
+    text: string;
+    /**
+     * The hidden number parameter(s) this reaction's strength stands for: at
+     * 100% they sit at their default, at 200% at double it, and off is zero.
+     * These used to be sliders of their own; the row is now their control.
+     */
+    param?: string | string[];
+  }[];
   /**
    * The model paints its own background each frame (e.g. to leave fading
    * trails), so the host doesn't clear the canvas first.
@@ -263,6 +320,6 @@ export interface ModelDefinition {
 
 export function defaultParams(def: ModelDefinition): ParamValues {
   const values: ParamValues = {};
-  for (const p of def.params) values[p.key] = p.default;
+  for (const p of def.params) if (p.kind !== "widget") values[p.key] = p.default;
   return values;
 }

@@ -34,8 +34,8 @@ export const GLOBAL_SPECS: ParamSpec[] = [
     options: [{ value: MODEL_OWN, label: "Each model's own" }, ...GRAVITY_MODES] },
   { kind: "number", key: "gravity", label: "Gravity strength", min: 0, max: 5, step: 0.05, default: 1, group: "Gravity",
     description: "How hard gravity pulls, as a multiple of each model's normal pull. 0 switches it off." },
-  { kind: "number", key: "energy", label: "Energy", min: 0, max: 4, step: 0.05, default: 1, group: "Motion",
-    description: "Multiplies how wildly things move and how hard hits land." },
+  { kind: "number", key: "energy", label: "Energy", min: 0, max: 4, step: 0.05, default: 1, group: "Motion", curve: 2,
+    description: "Multiplies each model's motion sliders (speed, spin, drift, wind) on top of everything else. It does not scale the modulation matrix: Intensity there does that." },
   { kind: "number", key: "trails", label: "Trails", min: -1, max: 1, step: 0.01, default: 0, group: "Motion",
     description: "Lengthens every model's fading trails, or cuts them below zero. Near the top they pile up into smoky echoes." },
   { kind: "number", key: "zoom", label: "Tunnel zoom", min: -1, max: 1, step: 0.01, default: 0, group: "Motion",
@@ -46,7 +46,7 @@ export const GLOBAL_SPECS: ParamSpec[] = [
 
 export function defaultGlobals(): ParamValues {
   const values: ParamValues = {};
-  for (const p of GLOBAL_SPECS) values[p.key] = p.default;
+  for (const p of GLOBAL_SPECS) if (p.kind !== "widget") values[p.key] = p.default;
   return values;
 }
 
@@ -87,7 +87,7 @@ export function setHidden(def: ModelDefinition, g: ParamValues, base: ParamValue
       if (key === "gravityMode" && g.gravityMode !== MODEL_OWN) want = g.gravityMode as string;
       else if (key === "colours") want = g.palette as string;
       base[key] = spec.options.some((o) => o.value === want) ? want : spec.default;
-    } else {
+    } else if (spec.kind === "boolean") {
       base[key] = spec.default;
     }
   }
