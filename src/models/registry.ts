@@ -4,6 +4,7 @@ import { boids } from "./boids";
 import { plexus } from "./plexus";
 import { reaction } from "./reaction";
 import { chladni } from "./chladni";
+import { facets } from "./facets";
 
 /**
  * Every model the app offers. To add a model, create a file in this folder
@@ -12,7 +13,7 @@ import { chladni } from "./chladni";
  */
 export const models: ModelDefinition[] = [
   boids,
-  cloth, reaction, chladni, plexus,
+  cloth, reaction, chladni, plexus, facets,
 ];
 
 export function findModel(id: string): ModelDefinition | undefined {

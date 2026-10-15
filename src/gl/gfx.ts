@@ -415,6 +415,15 @@ export class Gfx {
     this.vert(v + 5, dx * s, dy * s, 0, 0, SOLID, colour);
   }
 
+  /** A filled triangle. Its edges aren't antialiased, so draw lines over them where they show. */
+  tri(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, colour: Colour): void {
+    const s = this.scale;
+    const v = this.reserve(3);
+    this.vert(v, ax * s, ay * s, 0, 0, SOLID, colour);
+    this.vert(v + 1, bx * s, by * s, 0, 0, SOLID, colour);
+    this.vert(v + 2, cx * s, cy * s, 0, 0, SOLID, colour);
+  }
+
   /** A filled rectangle in CSS pixels. */
   rect(x: number, y: number, w: number, h: number, colour: Colour): void {
     const s = this.scale;
