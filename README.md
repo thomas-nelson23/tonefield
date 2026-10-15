@@ -2,7 +2,7 @@
 
 A music-driven visualizer for the desktop. Five models, each a physics or algorithmic system tuned to look striking, move with the music: a built-in generative band, a MIDI keyboard or controller, or a song you load drives them through their notes, spectrum and loudness, macros and modulation. Pick a model, shape it with sliders, and play with it using the mouse.
 
-![The visualizer playing along with the sequencer](docs/screenshot.png)
+![Tonefield playing Plexus along with the sequencer](docs/screenshot.png)
 
 Built with [Tauri 2](https://tauri.app) (Rust shell, native webview) and TypeScript. Every model draws with WebGL on the GPU, with Canvas 2D kept as a fallback. It runs on Linux (Arch, Debian/Ubuntu, AppImage), macOS (Apple Silicon and Intel) and Windows 10/11.
 
@@ -91,6 +91,12 @@ Keyboard: `Space` pause or play the visuals and the music, `Enter` play or stop 
 
 ## Models
 
+| Murmuration | Fabric | Living ink |
+| --- | --- | --- |
+| ![Murmuration](docs/screenshots/murmuration.png) | ![Fabric](docs/screenshots/fabric.png) | ![Living ink](docs/screenshots/living-ink.png) |
+| **Cymatics** | **Plexus** | |
+| ![Cymatics](docs/screenshots/cymatics.png) | ![Plexus](docs/screenshots/plexus.png) | |
+
 | Model | What the music does | Interaction |
 | --- | --- | --- |
 | Murmuration | A flock of light streaks chases each note and takes its colour, which spreads bird to bird; chords colour part of the flock, kicks scatter it, snares spin vortices | Hold to attract, right-click to scatter |
@@ -105,6 +111,8 @@ Shift works in place of right-click everywhere.
 
 ### Sequencer
 
+![The sequencer: Song, the mixer and the drums, with the snare on Grids and the hat on Both](docs/screenshots/sequencer.png)
+
 A generative band: instead of programming steps, you steer each part and it writes and evolves the music itself. The tab has three columns.
 
 - **Song**: style (broken beat, four on the floor, half-time, ambient), scale, root, tempo and swing, plus **New idea** (fresh patterns, melody and progression), **Fill** and **Hold all** (freeze everything).
@@ -117,9 +125,13 @@ A generative band: instead of programming steps, you steer each part and it writ
 
 Bass, chords and melody each play a voice ported from Mutable Instruments' **Plaits**, in its **Synth** column: eight engines (virtual analog, waveshaper, FM, grain formant, additive, string machine, plucked string, modal resonator), Harmonics, Timbre and Morph with envelope amounts, and the low-pass gate's Decay and Colour. Chords add **Inversion**, **Strum**, Attack and a tempo-synced Wobble; bass adds a Sub and Glide. The voices run in an AudioWorklet, off the main thread. Master holds the shared echo and reverb.
 
+![The Chords track: pattern controls and its Plaits synth](docs/screenshots/synth.png)
+
 Every hit, bass note and chord reaches the current model, and every control can be mapped to a MIDI knob.
 
 ### Modulation
+
+![The modulation matrix: built-in reactions on the left, your routes on the right](docs/screenshots/modulation.png)
 
 Two columns of rows, each with a live meter, a strength, an on/off switch, a dice and a delete button:
 
