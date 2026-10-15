@@ -1381,7 +1381,7 @@ export class Studio {
     const px = (x: number) => i + x * (w - 2 * i), py = (y: number) => h - i - y * (h - 2 * i);
     g.clearRect(0, 0, w, h);
     // The map's patterns sit on a grid; between them they blend.
-    g.fillStyle = "#30363d";
+    g.fillStyle = "#1c3442";
     for (let r = 0; r < GRIDS_ROWS; r++) {
       for (let c = 0; c < GRIDS_COLS; c++) {
         g.beginPath();
@@ -1390,7 +1390,7 @@ export class Studio {
       }
     }
     const x = px(seq.gridsX), y = py(seq.gridsY);
-    g.strokeStyle = "rgba(255, 138, 76, 0.35)";
+    g.strokeStyle = "rgba(42, 212, 255, 0.35)";
     g.lineWidth = 1;
     g.beginPath();
     g.moveTo(x, i);
@@ -1398,7 +1398,7 @@ export class Studio {
     g.moveTo(i, y);
     g.lineTo(w - i, y);
     g.stroke();
-    g.fillStyle = "#ff8a4c";
+    g.fillStyle = "#2ad4ff";
     g.beginPath();
     g.arc(x, y, 5, 0, Math.PI * 2);
     g.fill();
@@ -1486,7 +1486,7 @@ export class Studio {
     g.clearRect(0, 0, size, size);
     const playing = this.seq.playing && this.seq.current >= 0;
     // Each ring has its own number of steps, starting at the top.
-    g.strokeStyle = "#30363d";
+    g.strokeStyle = "#1c3442";
     g.lineWidth = 1;
     g.beginPath();
     g.moveTo(c, c - R * 0.2);
@@ -1498,7 +1498,7 @@ export class Studio {
       const angle = (pos: number) => -Math.PI / 2 + (pos / len) * Math.PI * 2;
       const on = this.seq.audible("drums") && seq[`${d.key}On`];
       g.globalAlpha = on ? 1 : 0.35;
-      g.strokeStyle = "#30363d";
+      g.strokeStyle = "#1c3442";
       g.lineWidth = 1;
       g.beginPath();
       g.arc(c, c, r, 0, Math.PI * 2);
@@ -1507,7 +1507,7 @@ export class Studio {
       if (cur >= 0) {
         // This ring's playhead: a short sweep across the ring.
         const a = angle(cur);
-        g.strokeStyle = "rgba(230, 237, 243, 0.4)";
+        g.strokeStyle = "rgba(217, 238, 242, 0.45)";
         g.lineWidth = 2;
         g.beginPath();
         g.moveTo(c + Math.cos(a) * (r - 7), c + Math.sin(a) * (r - 7));
@@ -1537,7 +1537,7 @@ export class Studio {
         const x = c + Math.cos(angle(k)) * r, y = c + Math.sin(angle(k)) * r;
         g.globalAlpha = on ? 1 : 0.35;
         if (!hit.on) {
-          g.fillStyle = "#30363d";
+          g.fillStyle = "#1c3442";
           g.beginPath();
           g.arc(x, y, 2, 0, Math.PI * 2);
           g.fill();
@@ -1552,7 +1552,7 @@ export class Studio {
           g.arc(x, y, rad, 0, Math.PI * 2);
           g.stroke();
         } else {
-          g.fillStyle = hit.kind === "fill" ? "#d2a8ff" : d.colour;
+          g.fillStyle = hit.kind === "fill" ? "#b48cff" : d.colour;
           if (!now) g.globalAlpha *= 0.55 + 0.45 * hit.velocity;
           g.beginPath();
           g.arc(x, y, rad, 0, Math.PI * 2);
@@ -1562,8 +1562,8 @@ export class Studio {
     });
     g.globalAlpha = 1;
     if (this.seq.fillPending) {
-      g.fillStyle = "#d2a8ff";
-      g.font = "11px system-ui, sans-serif";
+      g.fillStyle = "#b48cff";
+      g.font = "11px 'Sora Variable', system-ui, sans-serif";
       g.textAlign = "center";
       g.textBaseline = "middle";
       g.fillText("fill", c, c);
@@ -1590,11 +1590,11 @@ export class Studio {
     const col = w / STEPS, pad = 5;
     const y = (x: number) => pad + (1 - x) * (h - pad * 2);
     if (this.seq.playing && this.seq.current >= 0) {
-      g.fillStyle = "rgba(230, 237, 243, 0.08)";
+      g.fillStyle = "rgba(42, 212, 255, 0.08)";
       g.fillRect(this.seq.current * col, 0, col, h);
     }
     const notes = this.seq.melodyBar();
-    g.strokeStyle = "rgba(88, 166, 255, 0.35)";
+    g.strokeStyle = "rgba(108, 157, 255, 0.4)";
     g.lineWidth = 1.5;
     g.beginPath();
     notes.forEach((n, i) => {
@@ -1605,9 +1605,9 @@ export class Studio {
     g.stroke();
     for (const n of notes) {
       const x = (n.step + 0.5) * col;
-      g.fillStyle = "rgba(88, 166, 255, 0.18)";
+      g.fillStyle = "rgba(108, 157, 255, 0.2)";
       g.fillRect(x, y(n.x) - 1.5, Math.max(0, (n.length - 0.5) * col), 3);
-      g.fillStyle = n.step === this.seq.current ? "#a5d6ff" : "#58a6ff";
+      g.fillStyle = n.step === this.seq.current ? "#d2e0ff" : "#6c9dff";
       g.beginPath();
       g.arc(x, y(n.x), 2 + 2.5 * n.velocity, 0, Math.PI * 2);
       g.fill();

@@ -10,7 +10,7 @@
   <body>
     <div id="app">
       <header id="toolbar">
-        <div class="brand" title="Tonefield"><span class="brand-mark">Tf</span></div>
+        <div class="brand" title="Tonefield"><span class="brand-name">Tone<span class="brand-accent">field</span></span></div>
         <div class="tool-group">
           <label class="tool-label" for="model-select">Model</label>
           <select id="model-select"></select>
@@ -28,7 +28,7 @@
       </header>
       <aside id="sidebar">
         <details class="panel" data-panel="model" open>
-          <summary class="panel-head"><span class="panel-title">Model</span></summary>
+          <summary class="panel-head"><svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg><span class="panel-title">Model</span></summary>
           <div class="panel-body">
             <p id="model-description" class="muted"></p>
             <div class="sub-label">Interaction</div>
@@ -36,14 +36,14 @@
           </div>
         </details>
         <details class="panel" data-panel="params" open>
-          <summary class="panel-head"><span class="panel-title">Parameters</span></summary>
+          <summary class="panel-head"><svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg><span class="panel-title">Parameters</span></summary>
           <div class="panel-body">
             <div id="params"></div>
           </div>
         </details>
         <details class="panel" data-panel="global" open>
           <summary class="panel-head">
-            <span class="panel-title">Global controls</span>
+            <svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20M2 12h20"/></svg><span class="panel-title">Global controls</span>
             <span class="panel-note">every model</span>
             <button type="button" id="global-reset" class="panel-action" title="Put every global control back to neutral">Reset</button>
           </summary>
@@ -63,7 +63,7 @@
         </details>
         <details class="panel" data-panel="macros" open>
           <summary class="panel-head">
-            <span class="panel-title">Macros</span>
+            <svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 12 8.5 8.5M12 4v1.5M20 12h-1.5M4 12h1.5"/></svg><span class="panel-title">Macros</span>
             <span class="panel-note" id="macros-model"></span>
             <button type="button" id="macros-reset" class="panel-action" title="Turn every macro back to zero">Zero</button>
           </summary>
@@ -74,7 +74,7 @@
       </aside>
       <main id="main">
         <div id="doc-tabs">
-          <span class="doc-tab"><span id="doc-title"></span><span id="doc-state" class="doc-state"></span></span>
+          <span class="doc-tab"><svg class="doc-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h3l3-8 4 16 3-10 2 2h5"/></svg><span id="doc-title"></span><span id="doc-state" class="doc-state"></span></span>
         </div>
         <div id="stage">
           <canvas id="canvas"></canvas>

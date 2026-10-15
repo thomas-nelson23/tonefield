@@ -277,3 +277,5 @@ scripts/bump-version.mjs  sets the version everywhere for a release
 ## Credits
 
 The bass, chord and melody voices in `src/music/plaits/` are a TypeScript port of parts of [Plaits](https://github.com/pichenettes/eurorack/tree/master/plaits) and stmlib by Emilie Gillet (Mutable Instruments), used under the MIT licence; the copyright notice is kept at the top of `dsp.ts`. The drum map in `src/music/grids.ts` is original code in the spirit of Mutable Instruments' Grids, and Déjà vu borrows its idea from Marbles.
+
+The look follows the Deep Ocean theme of Thomas's home dashboard. Its fonts, [Sora](https://fonts.google.com/specimen/Sora), [JetBrains Mono](https://www.jetbrains.com/lp/mono/) and [Michroma](https://fonts.google.com/specimen/Michroma), are bundled from Fontsource under the SIL Open Font License.

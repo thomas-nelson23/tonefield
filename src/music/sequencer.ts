@@ -10,9 +10,9 @@ export type DrumKey = "kick" | "snare" | "hat";
 
 /** The drum tracks, inner ring first. `max` is how many hits full density gives. */
 export const DRUMS: { key: DrumKey; role: NoteRole; label: string; note: number; max: number; colour: string }[] = [
-  { key: "kick", role: "kick", label: "Kick", note: 36, max: 10, colour: "#f0883e" },
-  { key: "snare", role: "snare", label: "Snare", note: 38, max: 8, colour: "#ff7b72" },
-  { key: "hat", role: "hat", label: "Hat", note: 42, max: 16, colour: "#79c0ff" },
+  { key: "kick", role: "kick", label: "Kick", note: 36, max: 10, colour: "#ff4d6d" },
+  { key: "snare", role: "snare", label: "Snare", note: 38, max: 8, colour: "#ffb020" },
+  { key: "hat", role: "hat", label: "Hat", note: 42, max: 16, colour: "#2ad4ff" },
 ];
 
 export const SCALES: Record<string, { label: string; steps: number[] }> = {
