@@ -1,78 +1,35 @@
 # Tonefield
 
-A music-driven visualizer for the desktop. Each model is a physics or algorithmic system tuned to make striking visuals that move with the music: a built-in generative sequencer, a MIDI controller, or a song drives every model through its notes, its spectrum and loudness, macros and modulation. Pick a model, tweak it with sliders, and poke at it with the mouse.
+A music-driven visualizer for the desktop. Five models, each a physics or algorithmic system tuned to look striking, move with the music: a built-in generative band, a MIDI keyboard or controller, or a song you load drives them through their notes, spectrum and loudness, macros and modulation. Pick a model, shape it with sliders, and play with it using the mouse.
 
-![The visualizer playing along with the sequencer](docs/screenshot.png)
+![Tonefield playing Plexus along with the sequencer](docs/screenshot.png)
 
-Built with [Tauri 2](https://tauri.app) (Rust shell, native webview) and TypeScript, drawing with WebGL 2 on the GPU (Canvas 2D as a fallback). macOS is the first target; Linux (`.deb`, AppImage, and a pacman package for Arch-based distros like CachyOS) and Windows 10/11 (an `.exe` installer) build from the same code.
+Built with [Tauri 2](https://tauri.app) (Rust shell, native webview) and TypeScript. Every model draws with WebGL on the GPU, with Canvas 2D kept as a fallback. It runs on Linux (Arch, Debian/Ubuntu, AppImage), macOS (Apple Silicon and Intel) and Windows 10/11.
 
-## Models
+## Install
 
-| Model | What the music does | Interaction |
+Download the file for your system from the [latest release](https://github.com/thomas-nelson23/tonefield/releases/latest). After that, the **Update** button in the app installs new versions for you.
+
+| System | File | |
 | --- | --- | --- |
-| Murmuration | A flock of light streaks chases each note and takes its colour, which spreads bird to bird; kicks scatter it, snares spin vortices | Hold to attract, right-click or Shift to scatter |
-| Fabric | The spectrum lifts the fabric like an equaliser; kicks blow gusts, notes pluck it and dye it. Each side (top, bottom, left, right) can be pinned on its own; Resolution (up to 200 points across) and Smoothing set how many polygons it is drawn with | Drag to pull the fabric, right-drag to slice it (it heals) |
-| Living ink | Reaction–diffusion that grows where the spectrum is loud; notes seed blooms, the palette follows the melody | Drag to seed (what you draw stays fed for Brush hold seconds, so joins hold), right-drag to wipe |
-| Cymatics | Glowing sand on a vibrating plate morphs to a new figure with every note; the round plate draws turning mandalas. The plate fills the screen by default, and with gravity on the sand streams through the figure endlessly | Drag to stir the sand |
-| Plexus | Glowing nodes joined by lines in a pattern you pick: a drifting web, constellations, counter-rotating star rings, string art, fractal branches or a rolling mesh. Notes fire signals that race along the lines, kicks burst the shape, the bass line bends it | Drag to pull nodes in, right-drag to push them away |
+| Arch, CachyOS, EndeavourOS, Manjaro | `tonefield-<version>-1-x86_64.pkg.tar.zst` | [Arch](#arch-based-distros) |
+| Debian, Ubuntu | `Tonefield_<version>_amd64.deb` | [Debian / Ubuntu](#debian-and-ubuntu) |
+| Any Linux, no install | `Tonefield_<version>_amd64.AppImage` | [AppImage](#appimage) |
+| macOS (Apple Silicon and Intel) | `Tonefield_<version>_universal.dmg` | [macOS](#macos) |
+| Windows 10/11 (x64) | `Tonefield_<version>_x64-setup.exe` | [Windows](#windows) |
 
-Shift works in place of right-click everywhere. Most models share a **Look** group: **Afterglow** leaves fading trails, and **Tunnel zoom** and **Tunnel spin** make those trails fly outward and turn, for a feedback-tunnel effect. A **Colours** dropdown picks between following the melody, a rainbow that cycles with the beat, fire and ice.
+### Arch-based distros
 
-Keyboard: `Space` play/pause the simulation, `Enter` play/stop the sequencer, `R` reset, `.` single step while paused.
-
-The window is laid out like Photoshop: an options bar across the top (model, transport, Randomize, show or hide the music panel), the canvas as the document in the middle, and foldable panels down the right for the model, its **Parameters**, the **Global controls** that apply to every model (colour, gravity, energy, trails and tunnel, with built-in presets and your own saved ones) and the model's **Macros**. Colour scheme, gravity, trails and the tunnel live only in the global controls, so no model slider fights them.
-
-## Music
-
-The panel under the canvas has four tabs.
-
-- **Sequencer**: a generative band in five sections. Instead of programming steps, you steer each part and it writes and evolves the music itself.
-  - **Global**: tempo, style (broken beat, four on the floor, half-time, ambient), swing, scale and root, plus synth sound, volume, **New idea** (fresh patterns and progression), **Fill** and **Hold** (freeze everything).
-  - **Drums**: a euclidean sequencer drawn as three rings (kick inside, snare, hats outside). Each track's **Density** sets how many hits are spread evenly round the bar and **Variation** how much each bar strays with ghost notes, dropped hits and nudges (hits landing a hair early or late). **Steps** sets how many sixteenths the pattern has, **Offset** turns it round and **Reset** brings it back to its start every so many bars. Drag a ring round to turn its pattern; double-click to put it back. Picking a global style resets the rings to that style's beat.
-  - **Bass**: a style (root pulse, off-beat, octave bounce, syncopated, walking, drone), **Density**, **Range** (root only, then octave, fifth, chord tones and passing notes) and **Variation**. It follows the chords.
-  - **Chords**: jazz, pop, dance or epic, each cycling through progressions typical of the style. **Change every** sets how long each chord lasts, **Variation** switches progressions and swaps in style-typical substitutes (tritone subs, relative chords, sus and added notes), **Rhythm density** and **Rhythm variation** shape the comping, and **Déjà vu** (from Mutable Instruments' Marbles) decides how often a variation comes back instead of a new one, up to locking the varied progression into a loop. Epic is the wildcard: cinematic progressions with chromatic jumps and power chords, doubled an octave each side, and now and then it lifts the whole song up a step for a pass.
-  - **Melody**: a style (wander, arpeggio, motif, lyrical), **Range**, **Density**, and **Groove**, which adds syncopation, clips notes shorter and makes the second half of the bar answer the first. Strong beats lean on chord tones.
-  - **Sound**: bass, chords and melody each play a voice ported from Mutable Instruments' Plaits, with its eight pitched engines (virtual analog, waveshaper, FM, grain formant, additive, string machine, plucked string, modal resonator), its Harmonics, Timbre and Morph controls, envelope amounts on Timbre and Morph, and its low-pass gate (Decay and Colour). Chords add Plaits' continuous **Inversion** sweep, a **Strum**, Attack and a tempo-synced Wobble; bass adds a Sub sine and Glide. The voices run in an AudioWorklet, off the main thread.
-  Every part has a switch to mute it, and every control can be mapped to a MIDI knob. It plays through the drum kit and the Plaits voices (or silently, with Sound off) and sends every hit, bass note and chord to the current model.
-- **Modulation**: routes that let a music source push a slider. Sources are note envelopes (any note, kick, snare, hat, melody), last velocity and pitch, held MIDI notes, tempo-synced LFOs, audio levels (overall, bass, mids, treble), the mod wheel, pitch bend and any MIDI CC. Targets are the model's number sliders and its macros. A coloured bar under a slider shows how far it's being pushed.
-- **MIDI**: pick input devices, play notes through the melody's Plaits voice, and map knobs with MIDI learn (click MIDI learn, click a slider or macro, turn a knob). Macro and sequencer mappings carry across models, so a knob can ride a drum track's density or the chord speed live.
-- **Audio file**: play a song; its levels become modulation sources and its kick drums trigger note reactions.
-
-Every model also reacts to the music by itself: to each kind of note, and continuously to the sound's bass, loudness, spectrum and waveform. The Modulation tab lists each of these **built-in reactions** with a live meter and a switch to turn it off. The **Intensity** slider there scales them along with every route, and **Music drives the visuals** turns them all off. Each model also has a few **macros**: single 0..1 knobs that push several parameters at once. Routes, macro settings and switched-off reactions are saved per model.
-
-MIDI goes through the Rust side ([`src-tauri/src/midi.rs`](src-tauri/src/midi.rs), using `midir`) because the Linux and macOS webviews don't support Web MIDI (on Windows it uses the same path, through the system's WinMM MIDI). Messages reach the UI as `midi-message` events. On Linux that needs ALSA (`alsa-lib` on Arch, `libasound2-dev` to build on Debian/Ubuntu). In a plain browser (`npm run dev`) the app falls back to Web MIDI where the browser has it.
-
-## Running it
-
-Prerequisites: Node 20+, Rust (stable, via [rustup](https://rustup.rs)), and the [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your OS (on macOS that's just Xcode Command Line Tools: `xcode-select --install`).
+Download the package to a file first, then install that file:
 
 ```sh
-npm install
-npm run tauri dev     # desktop app with hot reload
-npm run dev           # or just the UI in a browser at http://localhost:1420
+curl -LO https://github.com/thomas-nelson23/tonefield/releases/download/v0.3.4/tonefield-0.3.4-1-x86_64.pkg.tar.zst
+sudo pacman -U ./tonefield-0.3.4-1-x86_64.pkg.tar.zst
 ```
 
-Build a distributable:
+(Swap in the version from the latest release.) Don't give `pacman -U` the URL directly: pacman then looks for a `.sig` signature file next to it, which releases don't have, and stops with a 404. Launch **Tonefield** from your app menu, or run `tonefield`. Uninstall with `sudo pacman -R tonefield`.
 
-```sh
-npm run tauri build   # macOS: .app + .dmg (add -- --target universal-apple-darwin for both chips)   Linux: .deb + .AppImage   Windows: setup .exe
-```
-
-On Linux, install the webview deps first:
-
-```sh
-# Debian / Ubuntu
-sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev
-
-# Arch / CachyOS / EndeavourOS / Manjaro
-sudo pacman -S --needed base-devel webkit2gtk-4.1 librsvg alsa-lib rust nodejs npm
-```
-
-## Installing on Arch-based distros (CachyOS, EndeavourOS, Manjaro)
-
-### Build a pacman package (recommended)
-
-The repo ships a [`PKGBUILD`](packaging/arch/PKGBUILD) that builds the app from your checkout and installs it like any other package, with a launcher entry and icon.
+To build the package from source instead, the repo ships a [`PKGBUILD`](packaging/arch/PKGBUILD):
 
 ```sh
 sudo pacman -S --needed base-devel git
@@ -81,75 +38,161 @@ cd tonefield/packaging/arch
 makepkg -si
 ```
 
-`makepkg -s` pulls in everything it needs (Rust, Node, `webkit2gtk-4.1`). If you already use `rustup`, that works too. Then launch **Tonefield** from your app menu, or run `tonefield`.
+`makepkg -s` pulls in everything it needs (Rust, Node, `webkit2gtk-4.1`, `alsa-lib`). To update a source build, `git pull`, then `makepkg -sif` in `packaging/arch`.
 
-- Update: `git pull`, then `makepkg -sif` in `packaging/arch`.
-- Uninstall: `sudo pacman -R tonefield`.
-
-The repo is private, so `git clone` needs you signed in to GitHub (for example `gh auth login`, or clone over SSH).
-
-### Download a prebuilt package
-
-Every push to `main` builds an Arch package in CI.
-
-1. Open the repo's **Actions** tab, pick the latest **Build** run on `main`, and download the `tonefield-arch` artifact.
-2. Unzip it and install:
-
-   ```sh
-   sudo pacman -U tonefield-*.pkg.tar.zst
-   ```
-
-### AppImage (no install)
-
-The `tonefield-Linux` artifact from the same run contains an AppImage that runs without installing anything. It needs FUSE 2:
+### Debian and Ubuntu
 
 ```sh
-sudo pacman -S --needed fuse2
-chmod +x Physics*.AppImage
-./Physics*.AppImage
+sudo apt install ./Tonefield_0.3.4_amd64.deb
 ```
 
-The AppImage is built on Ubuntu and bundles its own libraries, so the pacman package is the better fit on Arch.
+### AppImage
+
+Runs without installing anything. It needs FUSE 2 (`sudo pacman -S --needed fuse2` on Arch, `sudo apt install libfuse2` on Ubuntu):
+
+```sh
+chmod +x Tonefield_*.AppImage
+./Tonefield_*.AppImage
+```
+
+On Arch the pacman package is the better fit: the AppImage is built on Ubuntu and bundles its own libraries.
+
+### macOS
+
+1. Open the disk image and drag **Tonefield** into **Applications**.
+2. Open Tonefield. The app isn't signed with an Apple Developer ID, so the first time macOS says it can't verify it: click **Done**, open **System Settings › Privacy & Security**, scroll down and click **Open Anyway**, then confirm. After that it opens normally, including after in-app updates.
+
+Releases before 0.3.4 were Apple Silicon only and could say the app "is damaged"; `xattr -dr com.apple.quarantine /Applications/Tonefield.app` in Terminal fixes those.
+
+### Windows
+
+Run the setup `.exe`. It installs for your user only, so it needs no admin rights, and adds Start menu and uninstall entries. The installer isn't code-signed, so SmartScreen says "Windows protected your PC" the first time: click **More info**, then **Run anyway**. The app runs on Microsoft Edge WebView2, which Windows 11 and up-to-date Windows 10 already have; if it's missing, the installer downloads it.
 
 ### Troubleshooting
 
-- **Blank or white window, or a crash on start (common with NVIDIA drivers):** the app now sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself on Linux, so this should not happen. If you need the DMA-BUF renderer back, launch with `WEBKIT_DISABLE_DMABUF_RENDERER=0 tonefield`.
+- **Blank window or a crash on start on Linux (common with NVIDIA):** the app sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself, so this shouldn't happen. If you need the DMA-BUF renderer back, launch with `WEBKIT_DISABLE_DMABUF_RENDERER=0 tonefield`.
+- **Low frame rate on a big screen:** set **Resolution** in the bottom bar lower (Auto lowers it only while the frame rate drops under 55), and check **Drawing** is on GPU.
 
-## Installing on macOS
+## The window
 
-Download `Tonefield_<version>_universal.dmg` from the [latest release](https://github.com/thomas-nelson23/tonefield/releases/latest). It runs natively on both Apple Silicon and Intel Macs.
+The layout follows Photoshop:
 
-1. Open the disk image and drag **Tonefield** into **Applications**.
-2. Open Tonefield. The app isn't signed with an Apple Developer ID, so the first time macOS says it can't verify it: click **Done**, open **System Settings › Privacy & Security**, scroll down and click **Open Anyway**, then confirm. After that it opens normally.
+- **Options bar** across the top: the model picker, Pause / Step / Reset, and **Randomize**, which sets every parameter of the model to a random value except the ones you've locked with their padlock.
+- **Canvas** in the middle.
+- **Panels** down the right, each foldable: the model's description and how to interact with it, its **Parameters**, the **Global controls** and the model's **Macros**.
+- **Music panel** under the canvas, with the sequencer, modulation, MIDI and audio file tabs.
+- **Bottom bar**: switches to show or hide the music panel and the sidebar, frame rate with simulation and draw times, **Resolution**, **Drawing** (GPU or CPU), and the **Update** button.
 
-   Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/Tonefield.app`
+**Global controls** apply to every model and stay put when you switch: colour scheme (follow the melody, rainbow, fire, ice or bioluminescent), hue shift and cycle, saturation, brightness, contrast and negative; gravity direction and strength; energy; trails; and tunnel zoom and spin, which make the trails fly outward and turn for a feedback-tunnel effect. The presets dropdown sets them all at once, with ten built in (Neon tunnel, Inferno, Deep sea, Noir and others) and **Save** for your own.
 
-Updates from the in-app Update button don't need this step again. Releases before 0.3.4 were Apple Silicon only and could say the app "is damaged"; the Terminal command above fixes that.
+**Macros** are four 0..1 knobs per model that each push several parameters at once.
 
-## Installing on Windows 10/11
+Keyboard: `Space` pause or play the visuals and the music, `Enter` play or stop the sequencer, `R` reset the model, `.` step one frame while paused, `S` show or hide the sidebar.
 
-Download `Tonefield_<version>_x64-setup.exe` from the [latest release](https://github.com/thomas-nelson23/tonefield/releases/latest) and run it. It installs for your user only, so it needs no admin rights, and adds Start menu and uninstall entries.
+## Models
 
-The installer isn't code-signed, so Windows SmartScreen says "Windows protected your PC" the first time: click **More info**, then **Run anyway**. The app runs on Microsoft Edge WebView2, which Windows 11 and up-to-date Windows 10 already have; if it's missing, the installer downloads it.
+| Murmuration | Fabric | Living ink |
+| --- | --- | --- |
+| ![Murmuration](docs/screenshots/murmuration.png) | ![Fabric](docs/screenshots/fabric.png) | ![Living ink](docs/screenshots/living-ink.png) |
+| **Cymatics** | **Plexus** | |
+| ![Cymatics](docs/screenshots/cymatics.png) | ![Plexus](docs/screenshots/plexus.png) | |
 
-To build it yourself on Windows, install Node, Rust (via rustup, with the MSVC toolchain) and the Visual Studio C++ Build Tools ([Tauri's Windows prerequisites](https://tauri.app/start/prerequisites/#windows)), then run `npm install` and `npm run tauri build -- --bundles nsis`. The installer lands in `src-tauri/target/release/bundle/nsis/`.
+| Model | What the music does | Interaction |
+| --- | --- | --- |
+| Murmuration | A flock of light streaks chases each note and takes its colour, which spreads bird to bird; chords colour part of the flock, kicks scatter it, snares spin vortices | Hold to attract, right-click to scatter |
+| Fabric | The spectrum lifts the fabric like an equaliser; kicks blow gusts, notes pluck and dye it. Each side can be pinned on its own (free, whole edge, rings or just the corners), and Resolution and Smoothing set how finely it's drawn | Drag to pull the fabric, right-drag to slice it (it heals) |
+| Living ink | Reaction–diffusion that grows where the spectrum is loud; notes seed blooms, the palette follows the melody | Drag to seed (what you draw stays fed for Brush hold seconds), right-drag to wipe |
+| Cymatics | Glowing sand on a vibrating plate morphs to a new figure with every note; the round plate draws turning mandalas. The plate fills the screen, and with gravity on the sand streams through the figure endlessly | Drag to stir the sand |
+| Plexus | Glowing nodes joined by lines in a pattern you pick: web, constellations, star rings, string art, branches or wave mesh. Nodes spring between patterns, notes fire signals along the lines, kicks burst the shape, the bass bends it | Drag to pull nodes in, right-drag to push them away |
 
-## Updates
+Shift works in place of right-click everywhere.
 
-The **Update** button in the bottom bar checks this repo's [GitHub releases](https://github.com/thomas-nelson23/tonefield/releases) (quietly at every launch, and whenever you click it) and lights green when a newer version is out. Clicking it shows the release notes and installs the right file for how you installed Tonefield:
+## Music
 
-- **pacman package** (Arch, CachyOS): downloads the release's `.pkg.tar.zst` and runs `pacman -U` behind your desktop's password prompt (pkexec).
-- **.deb** (Debian, Ubuntu): the same with `apt-get install`.
+### Sequencer
+
+![The sequencer: Song, the mixer and the drums, with the snare on Grids and the hat on Both](docs/screenshots/sequencer.png)
+
+A generative band: instead of programming steps, you steer each part and it writes and evolves the music itself. The tab has three columns.
+
+- **Song**: style (broken beat, four on the floor, half-time, ambient), scale, root, tempo and swing, plus **New idea** (fresh patterns, melody and progression), **Fill** and **Hold all** (freeze everything).
+- **Mixer**: a strip each for Drums, Bass, Chords and Melody with a fader and meter, Pan, Echo and Reverb sends, Mute and Solo, and a Master strip. Muting a track also stops the visuals reacting to it; the **Mute** button at the top silences the audio only. Click a strip to edit that track.
+- **The selected track**, each with its own **Hold**:
+  - **Drums**: kick, snare and hat, drawn as three rings. Each drum plays in one of three modes. **Euclidean** spreads its **Density** hits evenly round the bar, with **Steps**, **Offset** and **Reset** (back to the start every so many bars); drag a ring round to turn it. **Grids** reads its pattern off a drum map in the spirit of Mutable Instruments' Grids: straight to broken left to right, sparse to busy bottom to top, with **Fill** setting how much of it plays. **Both** plays the two together. Each drum also has Variation, Volume, Pan, Pitch, Decay and a tone knob (Punch, Snap, Bright).
+  - **Bass**: a style (root pulse, off-beat, octave bounce, syncopated, walking, drone), Density, Range (root only up to chord tones and passing notes) and Variation. It follows the chords.
+  - **Chords**: jazz, pop, dance or epic, each with its own progressions and harmonic rhythm (how long chords hold, and pickups into the next). **Rhythm density** adds changes, **Rhythm variation** varies the pattern each pass, **Variation** swaps in style-typical substitutes, and **Déjà vu** (from Mutable Instruments' Marbles) decides how often a variation comes back instead of a new one. Epic now and then lifts the whole song up a step for a pass.
+  - **Melody**: a style (wander, arpeggio, motif, lyrical), Range, Density and Groove. Strong beats lean on chord tones.
+
+Bass, chords and melody each play a voice ported from Mutable Instruments' **Plaits**, in its **Synth** column: eight engines (virtual analog, waveshaper, FM, grain formant, additive, string machine, plucked string, modal resonator), Harmonics, Timbre and Morph with envelope amounts, and the low-pass gate's Decay and Colour. Chords add **Inversion**, **Strum**, Attack and a tempo-synced Wobble; bass adds a Sub and Glide. The voices run in an AudioWorklet, off the main thread. Master holds the shared echo and reverb.
+
+![The Chords track: pattern controls and its Plaits synth](docs/screenshots/synth.png)
+
+Every hit, bass note and chord reaches the current model, and every control can be mapped to a MIDI knob.
+
+### Modulation
+
+![The modulation matrix: built-in reactions on the left, your routes on the right](docs/screenshots/modulation.png)
+
+Two columns of rows, each with a live meter, a strength, an on/off switch, a dice and a delete button:
+
+- **Built into this model**: what the model does with the music by itself, such as Kick → Burst outward. **Restore built-ins** brings back any you deleted.
+- **Your routes**: a source pushes a slider or macro by a share of its range. Sources are note envelopes (any note, kick, snare, hat, melody), velocity and pitch, held MIDI notes, tempo-synced LFOs, audio levels (overall, bass, mids, treble), the mod wheel, pitch bend and any MIDI CC. A ♪ under a sidebar slider names what is pushing it.
+
+The dice rolls a random strength (and, on your routes, a random target). **Intensity** scales every route on every model, **Note decay** sets how long a hit keeps pushing, and **Music drives the visuals** turns it all off. Routes and built-in settings are saved per model.
+
+### MIDI
+
+Pick input devices, play notes through the melody's Plaits voice, and map knobs with **MIDI learn** (click it, click a slider, macro or global control, move a knob). Mappings for macros, global controls and the sequencer carry across models.
+
+MIDI goes through the Rust side ([`src-tauri/src/midi.rs`](src-tauri/src/midi.rs), using `midir`) because the Linux and macOS webviews don't support Web MIDI; Windows uses the same path through WinMM. On Linux it needs ALSA. In a plain browser (`npm run dev`) the app falls back to Web MIDI where the browser has it.
+
+### Audio file
+
+Play a song: its bass, mids, treble and level become modulation sources, and its kick drums can trigger note reactions.
+
+## Updates and releases
+
+The **Update** button in the bottom bar checks this repo's [releases](https://github.com/thomas-nelson23/tonefield/releases) at launch and whenever you click it, and lights up when a newer version is out. Clicking it shows the release notes and installs the right file for how you installed Tonefield:
+
+- **pacman package**: downloads the `.pkg.tar.zst` and runs `pacman -U` behind your desktop's password prompt.
+- **.deb**: the same with `apt-get install`.
 - **AppImage**: swaps the new AppImage in place.
-- **Windows**: runs the new setup `.exe` in passive mode, which reopens Tonefield when it's done.
-- **macOS**: opens the new universal disk image to drag into Applications.
-- **Anything else** (dev builds, `npm run tauri dev`): links to the release page.
+- **Windows**: runs the new setup `.exe`, which reopens Tonefield when it's done.
+- **macOS**: opens the new disk image to drag into Applications.
+- **Anything else** (dev builds): links to the release page.
 
-Releasing is a version bump: `npm run bump 0.3.0` sets the version in every file that carries it, and when that lands on `main`, CI builds every platform and publishes them as release `v0.3.0`. Pushes that keep the version publish nothing.
+Releasing is a version bump: `npm run bump 0.3.5` sets the version in every file that carries it. When that lands on `main`, CI builds every platform and publishes them as release `v0.3.5`. Pushes that keep the version publish nothing.
+
+## Building from source
+
+Prerequisites: Node 20+, Rust (stable, via [rustup](https://rustup.rs)) and the [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your OS.
+
+```sh
+# Arch / CachyOS
+sudo pacman -S --needed base-devel webkit2gtk-4.1 librsvg alsa-lib rust nodejs npm
+
+# Debian / Ubuntu
+sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev
+
+# macOS
+xcode-select --install
+
+# Windows: the Visual Studio C++ Build Tools and Rust's MSVC toolchain
+```
+
+```sh
+npm install
+npm run tauri dev     # desktop app with hot reload
+npm run dev           # or just the UI in a browser at http://localhost:1420
+npm run typecheck
+npm run tauri build   # Linux: .deb + .AppImage   macOS: .app + .dmg   Windows: setup .exe
+```
+
+For a universal Mac build add `-- --target universal-apple-darwin`; for just the Windows installer, `-- --bundles nsis`. Bundles land in `src-tauri/target/release/bundle/`.
 
 ## Adding a model
 
-Every model implements `SimulationModel` from [`src/models/types.ts`](src/models/types.ts). The host app owns the canvas, the fixed-timestep loop, the parameter sliders and pointer routing, so a model only describes its parameters and implements `reset`, `step` and `render` (plus optional `onPointer`, `onNote`, `resize` and `stats`).
+Every model implements `SimulationModel` from [`src/models/types.ts`](src/models/types.ts). The host app owns the canvas, the main loop, the parameter sliders and pointer routing, so a model only describes its parameters and implements `reset`, `step` and `render` (plus optional `renderGL`, `onPointer`, `onNote`, `resize` and `stats`).
 
 1. Create `src/models/myModel.ts` exporting a `ModelDefinition`:
 
@@ -160,13 +203,13 @@ Every model implements `SimulationModel` from [`src/models/types.ts`](src/models
      reset(view, params) { /* build state */ }
      step(dt, params, music) { /* advance state by dt seconds */ }
      render(g, view, params, music) { /* draw with the 2D context */ }
-     renderGL(gfx, view, params, music) { /* optional: the same picture on the GPU */ }
+     renderGL(gfx, view, params, music) { /* the same picture on the GPU */ }
    }
 
    export const myModel: ModelDefinition = {
      id: "my-model",
      name: "My model",
-     category: "Custom",
+     category: "Particles",
      description: "What it shows.",
      params: [
        { kind: "number", key: "strength", label: "Strength", min: 0, max: 10, step: 0.1, default: 1 },
@@ -177,14 +220,14 @@ Every model implements `SimulationModel` from [`src/models/types.ts`](src/models
 
 2. Add it to the list in [`src/models/registry.ts`](src/models/registry.ts).
 
-`renderGL` draws through `Gfx` ([`src/gl/gfx.ts`](src/gl/gfx.ts)): `feedback` for the shared trails, then `line`, `disc`, `ring`, `glow`, `quad4`, `rect`, and `upload` + `image` for pixel buffers, with `blend("add")` for the glowing look. The host uses it whenever WebGL works and the Drawing setting in the bottom bar is GPU, and falls back to `render` otherwise. In a software-rendered webview Canvas 2D fills every shape on the CPU, so `renderGL` is what keeps a busy model fast.
+`renderGL` draws through `Gfx` ([`src/gl/gfx.ts`](src/gl/gfx.ts)): `feedback` for the shared trails, then `line`, `disc`, `ring`, `glow`, `quad4`, `rect`, and `upload` + `image` for pixel buffers, with `blend("add")` for the glowing look. The host uses it whenever WebGL works and Drawing is set to GPU, and falls back to `render` otherwise. Canvas 2D fills every shape on the CPU in the Linux webview, so `renderGL` is what keeps a busy model fast.
 
-Sliders, checkboxes and dropdowns (`kind: "choice"`) are generated from `params` automatically. Mark a param `resetOnChange: true` if changing it should rebuild the simulation (e.g. a particle count).
+Sliders, checkboxes and dropdowns (`kind: "choice"`) are generated from `params`. Give a param a `group` to put it in a foldable group and a `description` for its tooltip. Mark it `resetOnChange: true` if changing it should rebuild the simulation (e.g. a particle count).
 
 To make a model musical:
 
-- Read the `MusicFrame` passed to `step` and `render`: drum and melody envelopes (`kick`, `snare`, `hat`, `tone`), audio bands (`level`, `bass`, `mid`, `treble`), a 48-bin log `spectrum`, a `wave` snapshot, the beat clock (`beats`, `pulse`), the last note's `hue` and `pitch`, and an overall `energy`. Values are already scaled by Intensity and zeroed for reactions the user switched off.
-- List what the model does with the music in `reactions` (`{ source: "bass", text: "The ring swells" }`), so it shows in the Modulation tab with a switch.
+- Read the `MusicFrame` passed to `step` and `render`: drum and melody envelopes (`kick`, `snare`, `hat`, `tone`), audio bands (`level`, `bass`, `mid`, `treble`), a 48-bin log `spectrum`, a `wave` snapshot, the beat clock (`beats`, `pulse`), the last note's `hue` and `pitch`, and an overall `energy`. Values are already scaled by Intensity and by each reaction's strength.
+- List what the model does with the music in `reactions` (`{ source: "bass", label: "Swell", text: "The ring swells with the bass" }`). Each becomes a built-in row in the Modulation tab.
 - Set `paintsBackground: true` to draw your own background, e.g. with `Feedback` from `models/lib/visual.ts` for trails and the tunnel effect.
 - Implement `onNote(note, params)`. A `NoteEvent` has the MIDI `note`, `velocity` (0..1), a `role` (`"kick"`, `"snare"`, `"hat"` or `"tone"`) and `x`, the note's place in its range from 0 (lowest) to 1 (highest), handy as a left-to-right position. `noteHue` in `models/lib/music.ts` gives a consistent colour per pitch.
 - Add `macros`: each is a 0..1 knob with `targets: [{ param, amount }]`, where `amount` is a fraction of that param's range.
@@ -196,31 +239,41 @@ Number params without `resetOnChange` can be modulated; the model always receive
 
 ```
 src/
-  main.ts            app shell: canvas, loop, input, model switching
+  main.ts            app shell: canvas, main loop, input, model switching, bottom bar
+  gl/gfx.ts          WebGL drawing used by every model's renderGL
   models/
     types.ts         the model interface
     registry.ts      list of available models
-    cloth.ts         Fabric: Verlet cloth lifted by the spectrum
     boids.ts         Murmuration: flocking light streaks
+    cloth.ts         Fabric: Verlet cloth lifted by the spectrum
     reaction.ts      Living ink: Gray-Scott reaction-diffusion
     chladni.ts       Cymatics: sand figures on a vibrating plate
     plexus.ts        Plexus: nodes joined by lines in six patterns
+    lib/grayscott*   Living ink's simulation, run in a Web Worker
     lib/visual.ts    trails / tunnel feedback, glow sprites, colour schemes
     lib/raster.ts    pixel buffer + palettes for grid models
+    lib/gravity.ts   shared gravity directions
     lib/music.ts     note colours and helpers for musical models
   music/
-    studio.ts        music panel: sequencer UI, routes, MIDI learn, audio file
+    studio.ts        music panel: sequencer, mixer, modulation matrix, MIDI learn, audio file
     sequencer.ts     generative drums, bass, chords and melody with lookahead scheduling
-    audio.ts         drum kit, mixer, file player, band and spectrum analyser
+    grids.ts         the Grids-style drum map
+    audio.ts         drum kit, mixer, effects, file player, band and spectrum analyser
     plaits/          Plaits engines and voices (dsp.ts), run in an AudioWorklet (worklet.ts)
     modulation.ts    modulation sources and how they combine with sliders and macros
+    globals.ts       global controls and presets
     midi.ts          MIDI input (Tauri events, or Web MIDI in a browser)
-  ui/controls.ts     builds parameter controls from a model's spec
-  ui/updater.ts      the Update button and its popup
-src-tauri/           Rust/Tauri desktop shell, bundle config, MIDI input and updates (src/update.rs)
+  ui/
+    controls.ts      builds parameter controls (with padlocks) from a model's spec
+    knob.ts          mixer knobs and faders
+    grade.ts         global colour controls applied on the GPU
+    panels.ts        foldable sidebar panels
+    updater.ts       the Update button and its popup
+src-tauri/           Rust/Tauri desktop shell, bundle config, MIDI input (src/midi.rs) and updates (src/update.rs)
+packaging/arch/      PKGBUILD for the pacman package
 scripts/bump-version.mjs  sets the version everywhere for a release
 ```
 
 ## Credits
 
-The bass, chord and melody voices in `src/music/plaits/` are a TypeScript port of parts of [Plaits](https://github.com/pichenettes/eurorack/tree/master/plaits) and stmlib by Emilie Gillet (Mutable Instruments), used under the MIT licence; the copyright notice is kept at the top of `dsp.ts`.
+The bass, chord and melody voices in `src/music/plaits/` are a TypeScript port of parts of [Plaits](https://github.com/pichenettes/eurorack/tree/master/plaits) and stmlib by Emilie Gillet (Mutable Instruments), used under the MIT licence; the copyright notice is kept at the top of `dsp.ts`. The drum map in `src/music/grids.ts` is original code in the spirit of Mutable Instruments' Grids, and Déjà vu borrows its idea from Marbles.
