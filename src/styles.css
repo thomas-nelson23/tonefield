@@ -232,14 +232,14 @@ label.check { display: inline-flex; align-items: center; gap: 7px; cursor: point
 .tool-sep { width: 1px; height: 20px; background: var(--line); }
 
 /* Pause / Step / Reset as one segmented control, like the dashboard's Month/Week/Agenda. */
-.transport, .drum-mode {
+.transport, .drum-mode, .segmented {
   gap: 2px; padding: 2px;
   border: 1px solid var(--edge); border-radius: 9px; background: rgba(0, 0, 0, 0.25);
 }
-.transport button, .drum-mode button {
+.transport button, .drum-mode button, .segmented button {
   height: 22px; border: 0; border-radius: 7px; background: none; color: var(--muted);
 }
-.transport button:hover:not(:disabled), .drum-mode button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); color: var(--text); }
+.transport button:hover:not(:disabled), .drum-mode button:hover:not(:disabled), .segmented button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); color: var(--text); }
 #play-pause { min-width: 66px; color: var(--cyan); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.25); }
 #play-pause.paused { background-color: var(--strong); color: var(--accent-ink); box-shadow: none; }
 
@@ -451,7 +451,7 @@ body.learning #dock .param.learn-target { outline: 1px solid var(--macro); }
   border-top: 1px solid var(--line);
   background: var(--app);
   display: flex; flex-direction: column;
-  height: 330px; flex-shrink: 0;
+  height: 346px; flex-shrink: 0;
 }
 #dock.collapsed { display: none; }
 /* Numbered tabs like the dashboard's menu: the current one lights its number red and its name white. */
@@ -601,7 +601,7 @@ button.strip-btn.solo.active { background: var(--solo-bg); border-color: var(--s
 .track-body .part-head .chord-chips { flex: 1; }
 .track-cols { display: flex; gap: 22px; align-items: flex-start; }
 .track-col { display: flex; flex-direction: column; gap: 4px; }
-.track-col > .part-sliders:not(.cols-2):not(.cols-3) { width: 180px; }
+.track-col > .part-sliders:not(.cols-2):not(.cols-3):not(.cols-4) { width: 180px; }
 .melody-col { width: 314px; }
 .master-help { max-width: 320px; margin-top: 20px; }
 
@@ -646,7 +646,42 @@ button.drum-name:hover:not(:disabled) { background: none; color: var(--voice); }
 }
 .chip.current { background: rgba(180, 140, 255, 0.16); border-color: var(--macro); color: var(--strong); transform: scale(1.08); }
 .chip.lift { border-style: dashed; color: var(--macro); }
-#melody-view { width: 100%; height: 58px; border-radius: var(--radius-sm); background: var(--field); border: 1px solid var(--line); flex-shrink: 0; margin-bottom: 4px; }
+
+/* ---- Friendlier music panels ---- */
+
+/* The hint line in the tab bar: says what the control under the pointer does. */
+.dock-hint {
+  flex: 1; min-width: 0; margin: 0 12px; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  font-size: 11px; line-height: 14px; color: var(--soft); text-align: right;
+}
+.dock-hint.idle { color: var(--muted); }
+/* A short choice as a row of buttons. */
+.segmented { display: inline-flex; }
+.segmented button { flex: 1; height: 20px; padding: 0 8px; font-size: 11px; white-space: nowrap; }
+.segmented button.active { background: var(--accent-soft); color: var(--cyan); box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.25); }
+.seg-param { display: flex; flex-direction: column; gap: 3px; margin-bottom: 7px; }
+.seg-param .seg-label { color: var(--muted); }
+.seg-param .segmented { display: flex; }
+.seg-param .segmented button { padding: 0 4px; }
+.part-caption { flex: 1; min-width: 0; margin: 0; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.view-switch button { padding: 0 10px; }
+button.dice-btn { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 9px 0 7px; font-size: 10.5px; font-weight: 500; }
+button.dice-btn svg { width: 12px; height: 12px; }
+/* "New idea" is the one button to press when you don't know what to press. */
+button.new-idea { color: var(--cyan); border-color: rgba(var(--cyan-rgb), 0.45); background-color: var(--accent-soft); }
+.preset-chips, .sound-presets { display: flex; flex-wrap: wrap; gap: 4px; }
+.sound-presets { margin-bottom: 8px; max-width: 640px; }
+button.preset-chip { height: 22px; padding: 0 10px; font-size: 11px; }
+button.preset-chip.active { color: var(--part, var(--cyan)); border-color: var(--part, var(--cyan)); background-color: rgba(255, 255, 255, 0.04); }
+.part-sliders.cols-4 { display: grid; column-gap: 14px; align-content: start; grid-template-columns: repeat(4, 150px); }
+.marbles-col { width: 204px; }
+.track-cols > .track-col { flex-shrink: 0; }
+.track-cols[hidden] { display: none; }
+#melody-rhythm, #melody-notes, #melody-loop { width: 140px; }
+.track-body[data-track="melody"] .track-cols { gap: 14px; }
+#global-sliders { display: grid; grid-template-columns: 1fr 1fr; column-gap: 12px; }
+#melody-view { width: 100%; height: 112px; border-radius: var(--radius-sm); background: var(--field); border: 1px solid var(--line); flex-shrink: 0; margin-bottom: 4px; cursor: crosshair; touch-action: none; }
 
 .mod-layout { display: grid; grid-template-columns: 220px 1fr; gap: 24px; }
 /* Built-in rows and routes side by side, stacking when the window is too narrow for both. */

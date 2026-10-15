@@ -1,6 +1,7 @@
 import type { NoteEvent, NoteRole } from "../models/types";
 import type { AudioEngine, DrumSound, MixSettings, SynthTrack, TrackKey } from "./audio";
 import { GRIDS_STEPS, gridsLevels, gridsThreshold } from "./grids";
+import { DejaVuSequence, Distribution, LOOP_SIZE, pitchWeights, quantize, smoothness, spread, stepsLevel } from "./marbles";
 import { ENGINES, type EngineName, type Patch } from "./plaits/patch";
 
 /** Sixteenth notes per bar. */
@@ -207,21 +208,46 @@ export const CHORD_STYLES: Record<string, {
 const WOBBLE_RATES = [8, 4, 2, 1, 0.5];
 export const WOBBLE_RATE_LABELS = ["2 bars", "1 bar", "½ bar", "1 beat", "½ beat"];
 
-export const MELODY_STYLES: Record<string, { label: string }> = {
-  wander: { label: "Wander" },
-  arp: { label: "Arpeggio" },
-  motif: { label: "Motif" },
-  lyrical: { label: "Lyrical" },
-};
+/**
+ * How the melody decides which clock ticks get a note, after Marbles' t
+ * section: a coin toss on every tick, notes that come in bursts, or steady
+ * divisions of the clock. Density is Marbles' t Bias.
+ */
+export const MELODY_RHYTHMS = [
+  { value: "coin", label: "Coin" }, { value: "bursts", label: "Bursts" }, { value: "steady", label: "Steady" },
+];
+/** The melody's clock, in sixteenths per tick. */
+export const MELODY_RATES = [8, 4, 2, 1];
+export const MELODY_RATE_LABELS = ["½", "¼", "⅛", "1/16"];
+/** What Déjà vu loops: both the rhythm and the notes, or only one (the other stays fresh), like Marbles' two lock buttons. */
+export const MELODY_LOOPS = [
+  { value: "both", label: "Both" }, { value: "rhythm", label: "Rhythm" }, { value: "notes", label: "Notes" },
+];
+/** Steady's patterns over eight ticks, sparse to every tick; Density picks one. */
+const STEADY = ["10000000", "10001000", "10010010", "10101010", "10110110", "11101110", "11111111"];
+
+/** Starting points for the melody, each a handful of its controls. */
+export const MELODY_PRESETS: { id: string; label: string; hint: string; values: Partial<SequencerState> }[] = [
+  { id: "drift", label: "Drift", hint: "Slow, low notes that rarely repeat",
+    values: { melodyRhythm: "coin", melodyRate: 1, melodyDensity: 0.45, melodyJitter: 0.15, melodyLegato: 0.9, melodySpread: 0.4, melodyBias: 0.35, melodySteps: 0.3, melodyOctaves: 1.5, melodyDejaVu: 0.15, melodyLength: 8, melodyLoop: "both" } },
+  { id: "wander", label: "Wander", hint: "A tune that keeps a shape but slowly changes",
+    values: { melodyRhythm: "coin", melodyRate: 2, melodyDensity: 0.5, melodyJitter: 0, melodyLegato: 0.5, melodySpread: 0.45, melodyBias: 0.5, melodySteps: 0.7, melodyOctaves: 1.5, melodyDejaVu: 0.35, melodyLength: 8, melodyLoop: "both" } },
+  { id: "riff", label: "Riff", hint: "A short phrase locked into a loop",
+    values: { melodyRhythm: "coin", melodyRate: 3, melodyDensity: 0.6, melodyJitter: 0, melodyLegato: 0.35, melodySpread: 0.5, melodyBias: 0.45, melodySteps: 0.75, melodyOctaves: 1, melodyDejaVu: 0.5, melodyLength: 6, melodyLoop: "both" } },
+  { id: "sparkle", label: "Sparkle", hint: "Quick, high notes on the chord",
+    values: { melodyRhythm: "bursts", melodyRate: 3, melodyDensity: 0.55, melodyJitter: 0, melodyLegato: 0.2, melodySpread: 0.7, melodyBias: 0.75, melodySteps: 0.85, melodyOctaves: 2, melodyDejaVu: 0.3, melodyLength: 16, melodyLoop: "rhythm" } },
+  { id: "chant", label: "Chant", hint: "Steady notes that stay close together",
+    values: { melodyRhythm: "steady", melodyRate: 2, melodyDensity: 0.5, melodyJitter: 0, melodyLegato: 0.7, melodySpread: 0.2, melodyBias: 0.5, melodySteps: 0.65, melodyOctaves: 1, melodyDejaVu: 0.4, melodyLength: 4, melodyLoop: "both" } },
+  { id: "shuffle", label: "Shuffle", hint: "A loop played in a different order each time round",
+    values: { melodyRhythm: "coin", melodyRate: 2, melodyDensity: 0.65, melodyJitter: 0, melodyLegato: 0.45, melodySpread: 0.55, melodyBias: 0.5, melodySteps: 0.7, melodyOctaves: 1.5, melodyDejaVu: 0.85, melodyLength: 8, melodyLoop: "notes" } },
+  { id: "chaos", label: "Chaos", hint: "Wide leaps, loose timing, never the same twice",
+    values: { melodyRhythm: "coin", melodyRate: 3, melodyDensity: 0.55, melodyJitter: 0.6, melodyLegato: 0.3, melodySpread: 0.9, melodyBias: 0.5, melodySteps: 0.55, melodyOctaves: 3, melodyDejaVu: 0, melodyLength: 16, melodyLoop: "both" } },
+];
 
 /** Metric weight of each sixteenth for melody notes: downbeats first, then off-beats. */
 const MELODY_WEIGHT = [1, 0.15, 0.45, 0.2, 0.8, 0.15, 0.5, 0.25, 0.9, 0.15, 0.45, 0.2, 0.75, 0.2, 0.55, 0.3];
-/** What Groove leans the melody's rhythm towards: the "and"s and "a"s, syncopated. */
-const GROOVE_WEIGHT = [0.6, 0.2, 0.35, 0.85, 0.2, 0.4, 0.9, 0.3, 0.55, 0.25, 0.35, 0.85, 0.2, 0.45, 0.9, 0.6];
 /** Extra snare and hat weight in the last beat of a fill bar. */
 const FILL_WEIGHT = [0.55, 0.7, 0.8, 0.95];
-/** How fast the melody drifts from bar to bar. */
-const MELODY_DRIFT = 0.3;
 
 export interface SequencerState {
   // Global
@@ -233,6 +259,10 @@ export interface SequencerState {
   style: string;
   /** Freeze every part instead of letting it evolve. */
   hold: boolean;
+  /** 0..1, 0.5 as set: pushes every part's density down or up. */
+  energy: number;
+  /** 0..1, 0.5 as set: scales how much every part changes as it plays. */
+  evolve: number;
   /** Freeze one part, leaving the others to evolve. */
   drumsHold: boolean;
   bassHold: boolean;
@@ -309,13 +339,23 @@ export interface SequencerState {
   chordColour: number;
   /** Which progression of the style is playing. */
   prog: number;
-  // Melody
-  melodyStyle: string;
+  // Melody, after Marbles. Rhythm (its t section): which ticks play (a
+  // MELODY_RHYTHMS value), the clock (a MELODY_RATES index), Density (t Bias),
+  // Jitter, and how long each note holds.
+  melodyRhythm: string;
+  melodyRate: number;
   melodyDensity: number;
-  /** Span in scale degrees. */
-  melodyRange: number;
-  /** 0..1: straight to syncopated, repeating and clipped. */
-  melodyGroove: number;
+  melodyJitter: number;
+  melodyLegato: number;
+  // Notes (its X section): Spread, Bias (the register), Steps, and how many octaves the notes cover.
+  melodySpread: number;
+  melodyBias: number;
+  melodySteps: number;
+  melodyOctaves: number;
+  // Déjà vu, the loop's length in ticks, and what it loops (a MELODY_LOOPS value).
+  melodyDejaVu: number;
+  melodyLength: number;
+  melodyLoop: string;
   // Melody sound, a Plaits patch (it's also what a MIDI keyboard plays through)
   /** Plaits engine name (see ENGINE_CHOICES). */
   melodyEngine: string;
@@ -382,9 +422,45 @@ export const SOUND_DEFAULTS = {
   melody: sound("melody", "fold", [0.5, 0.2, 0.5, 0.35, 0, 0.55, 0.5]),
 };
 
+/**
+ * Named starting sounds for each synth track, so a sound can be picked by ear
+ * before learning what Harmonics, Timbre and Morph do. Each is a Plaits patch
+ * (same order as SOUND_DEFAULTS) plus any of the track's other sound controls.
+ * The first of each is the track's default sound.
+ */
+function soundPreset(prefix: "bass" | "chord" | "melody", label: string, engine: EngineName, v: number[], extra: Record<string, number> = {}) {
+  return { label, values: { ...sound(prefix, engine, v), ...extra } as Partial<SequencerState> };
+}
+export const SOUND_PRESETS: Record<SynthTrack, { label: string; values: Partial<SequencerState> }[]> = {
+  bass: [
+    soundPreset("bass", "Round", "analog", [0.5, 0.25, 0.6, 0.45, 0, 0.45, 0.6], { bassSub: 0.5 }),
+    soundPreset("bass", "Acid", "analog", [0.5, 0.65, 0.9, 0.7, 0, 0.35, 0.95], { bassSub: 0.2 }),
+    soundPreset("bass", "Rubber", "fm", [0.25, 0.35, 0.2, 0.55, 0, 0.4, 0.5], { bassSub: 0.4 }),
+    soundPreset("bass", "Growl", "fold", [0.4, 0.55, 0.6, 0.45, 0.2, 0.5, 0.7], { bassSub: 0.35 }),
+    soundPreset("bass", "Pluck", "pluck", [0.3, 0.5, 0.45, 0, 0, 0.45, 0.3], { bassSub: 0.45 }),
+    soundPreset("bass", "Deep sub", "analog", [0.5, 0, 0, 0, 0, 0.7, 0.2], { bassSub: 0.85 }),
+  ],
+  chords: [
+    soundPreset("chord", "String pad", "strings", [0.55, 0.6, 0.35, 0, 0, 0.8, 0.4], { chordAttack: 0 }),
+    soundPreset("chord", "Organ", "strings", [0.45, 0.15, 0.8, 0, 0, 0.8, 0.15], { chordAttack: 0 }),
+    soundPreset("chord", "Glass keys", "fm", [0.5, 0.5, 0.1, 0.4, 0, 0.7, 0.3], { chordAttack: 0 }),
+    soundPreset("chord", "Bell pad", "modal", [0.7, 0.6, 0.75, 0, 0, 0.75, 0.3], { chordAttack: 0.3 }),
+    soundPreset("chord", "Choir", "grain", [0.4, 0.45, 0.5, 0, 0, 0.8, 0.3], { chordAttack: 0.45 }),
+    soundPreset("chord", "Soft saw", "analog", [0.5, 0.5, 0.5, 0.2, 0, 0.75, 0.6], { chordAttack: 0.2 }),
+  ],
+  melody: [
+    soundPreset("melody", "Folded lead", "fold", [0.5, 0.2, 0.5, 0.35, 0, 0.55, 0.5], { melodyAttack: 0 }),
+    soundPreset("melody", "Bell", "modal", [0.75, 0.7, 0.6, 0, 0, 0.6, 0.3], { melodyAttack: 0 }),
+    soundPreset("melody", "Pluck", "pluck", [0.4, 0.65, 0.6, 0, 0, 0.6, 0.3], { melodyAttack: 0 }),
+    soundPreset("melody", "Flute", "additive", [0.3, 0.5, 0.5, 0, 0, 0.7, 0.1], { melodyAttack: 0.25 }),
+    soundPreset("melody", "FM keys", "fm", [0.5, 0.45, 0.15, 0.6, 0, 0.5, 0.5], { melodyAttack: 0 }),
+    soundPreset("melody", "Voice", "grain", [0.45, 0.5, 0.5, 0.3, 0, 0.55, 0.3], { melodyAttack: 0.15 }),
+  ],
+};
+
 export function defaultState(): SequencerState {
   const s: SequencerState = {
-    tempo: 112, swing: 0, scale: "minorPent", root: 9, sound: true, style: "broken", hold: false, seed: 1,
+    tempo: 112, swing: 0, scale: "minorPent", root: 9, sound: true, style: "broken", hold: false, seed: 1, energy: 0.5, evolve: 0.5,
     drumsHold: false, bassHold: false, chordsHold: false, melodyHold: false,
     drumsOn: true, bassOn: true, chordsOn: true, melodyOn: true,
     kickMode: "euclid", snareMode: "euclid", hatMode: "euclid", kickFill: 0.5, snareFill: 0.5, hatFill: 0.5,
@@ -395,7 +471,7 @@ export function defaultState(): SequencerState {
     bassStyle: "pulse", bassDensity: 0.4, bassRange: 3, bassVariation: 0.3,
     chordStyle: "pop", chordVariation: 0.3, chordDensity: 0.3, chordRhythm: 0.25, prog: 0,
     chordDejaVu: 0, chordAttack: 0, chordWobble: 0, chordWobbleRate: 2, chordInversion: 0.5, chordStrum: 0, chordOctave: 0,
-    melodyStyle: "wander", melodyDensity: 0.4, melodyRange: 8, melodyGroove: 0.3,
+    ...(MELODY_PRESETS[1].values as Pick<SequencerState, "melodyRhythm" | "melodyRate" | "melodyDensity" | "melodyJitter" | "melodyLegato" | "melodySpread" | "melodyBias" | "melodySteps" | "melodyOctaves" | "melodyDejaVu" | "melodyLength" | "melodyLoop">),
     melodyOctave: 0, melodyAttack: 0, melodyGlide: 0,
     bassOctave: 0, bassSub: 0.5, bassGlide: 0,
     ...SOUND_DEFAULTS.bass, ...SOUND_DEFAULTS.chord, ...SOUND_DEFAULTS.melody,
@@ -445,7 +521,8 @@ export function sanitizeState(saved: unknown): SequencerState {
   if (!(s.scale in SCALES)) s.scale = "minorPent";
   if (!(s.bassStyle in BASS_STYLES)) s.bassStyle = "pulse";
   if (!(s.chordStyle in CHORD_STYLES)) s.chordStyle = "pop";
-  if (!(s.melodyStyle in MELODY_STYLES)) s.melodyStyle = "wander";
+  if (!MELODY_RHYTHMS.some((m) => m.value === s.melodyRhythm)) s.melodyRhythm = "coin";
+  if (!MELODY_LOOPS.some((m) => m.value === s.melodyLoop)) s.melodyLoop = "both";
   for (const prefix of Object.values(SOUND_PREFIX)) {
     if (!ENGINES.includes(str[`${prefix}Engine`] as EngineName)) str[`${prefix}Engine`] = SOUND_DEFAULTS[prefix][`${prefix}Engine` as never];
   }
@@ -460,7 +537,11 @@ export function sanitizeState(saved: unknown): SequencerState {
   s.gridsY = Math.max(0, Math.min(1, s.gridsY));
   s.root = ((Math.round(s.root) % 12) + 12) % 12;
   s.bassRange = Math.max(1, Math.min(7, Math.round(s.bassRange)));
-  s.melodyRange = Math.max(2, Math.min(16, Math.round(s.melodyRange)));
+  s.melodyRate = Math.max(0, Math.min(MELODY_RATES.length - 1, Math.round(s.melodyRate)));
+  s.melodyLength = Math.max(1, Math.min(LOOP_SIZE, Math.round(s.melodyLength)));
+  s.melodyOctaves = Math.max(1, Math.min(3, s.melodyOctaves));
+  s.energy = Math.max(0, Math.min(1, s.energy));
+  s.evolve = Math.max(0, Math.min(1, s.evolve));
   return s;
 }
 
@@ -570,13 +651,15 @@ interface DrumVariation {
   chaos: Float32Array | null;
 }
 
-/** One melody note in the bar view. */
-export interface MelodyNote {
-  step: number;
-  /** 0..1, low to high within the melody's range. */
-  x: number;
-  length: number;
-  velocity: number;
+/** The melody's loop as the view draws it: Marbles' two random loops, rhythm and notes. */
+export interface MelodyLoop {
+  /** Whether each tick of the rhythm loop plays, and how loud. */
+  ticks: { on: boolean; velocity: number }[];
+  /** Each note of the note loop: 0..1 within the range (after Steps), and the raw value before it. */
+  notes: { x: number; raw: number }[];
+  /** The cells that played last, or -1. */
+  tick: number;
+  note: number;
 }
 
 /**
@@ -636,12 +719,15 @@ export class Sequencer {
   private bassPick: number[] = [];
   private chordGate: number[] = [];
   private voicing: number[] = [];
-  private melodyGate: number[] = [];
-  private degree: number[] = [];
-  private motif: number[] = [];
-  private motifShift: number[] = [];
-  private lyric: number[] = [];
-  private arpMode = 0;
+  /** The melody's random loops, as on Marbles: one for its rhythm and one for its notes. */
+  private tLoop: DejaVuSequence;
+  private xLoop: DejaVuSequence;
+  /** Spread and Bias as a distribution, shared with the view. */
+  readonly distribution = new Distribution();
+  /** Whether the last tick played, for Bursts. */
+  private burstOn = false;
+  /** Which cells of the melody's loops are sounding, for the view. */
+  melodyCursor = { tick: -1, note: -1 };
   private bar = 0;
   private fillBar = false;
   private fillRequested = false;
@@ -650,13 +736,15 @@ export class Sequencer {
   private nextTime = 0;
   private startTime = 0;
   private timer: number | undefined;
-  private queue: { time: number; step: number; drumSteps: number[]; chord: number; events: NoteEvent[] }[] = [];
+  private queue: { time: number; step: number; drumSteps: number[]; chord: number; melody: { tick: number; note: number }; events: NoteEvent[] }[] = [];
   /** Which chord the scheduler has reached (it runs a little ahead of what's heard). */
   private schedChord = -1;
 
   constructor(private audio: AudioEngine, state?: SequencerState) {
     this.state = state ?? defaultState();
     this.rng = mulberry32(this.state.seed);
+    this.tLoop = new DejaVuSequence(() => this.rng());
+    this.xLoop = new DejaVuSequence(() => this.rng());
     this.generate();
   }
 
@@ -679,6 +767,32 @@ export class Sequencer {
     this.rng = mulberry32(this.state.seed);
     this.state.prog = Math.floor(this.rng() * 8);
     this.generate();
+  }
+
+  /**
+   * A fresh start for one part while the others play on: new rhythm and notes
+   * for the bass, a new progression for the chords, new loops for the melody.
+   * (The drums' patterns come from their controls, so the panel rolls those.)
+   */
+  reroll(part: "drums" | "bass" | "chords" | "melody"): void {
+    const r = this.rng;
+    if (part === "drums") this.drumVar = DRUMS.map(() => ({ nudge: 0, ghost: new Map(), drop: new Set(), chaos: null }));
+    if (part === "bass") {
+      this.bassGate = Array.from({ length: STEPS }, r);
+      this.bassPick = Array.from({ length: STEPS }, r);
+    }
+    if (part === "chords") {
+      const n = this.progressions().length;
+      this.state.prog = (this.state.prog + 1 + Math.floor(r() * Math.max(1, n - 1))) % n;
+      this.chordGate = Array.from({ length: STEPS }, r);
+      this.memory = [];
+      this.refreshHarmony();
+    }
+    if (part === "melody") {
+      this.tLoop.reseed();
+      this.xLoop.reseed();
+    }
+    this.version++;
   }
 
   /** Play a fill at the end of the current bar. */
@@ -708,27 +822,8 @@ export class Sequencer {
     this.bassGate = Array.from({ length: STEPS }, r);
     this.bassPick = Array.from({ length: STEPS }, r);
     this.chordGate = Array.from({ length: STEPS }, r);
-    this.melodyGate = Array.from({ length: STEPS }, r);
-    // A melody that wanders by small steps.
-    let pos = 0;
-    this.degree = [];
-    for (let i = 0; i < STEPS; i++) {
-      pos += [-2, -1, -1, 0, 1, 1, 2][Math.floor(r() * 7)];
-      pos = Math.max(-6, Math.min(6, pos));
-      this.degree.push(pos);
-    }
-    // A one-beat cell, repeated and moved each beat.
-    this.motif = [0];
-    for (let i = 1; i < 4; i++) this.motif.push(this.motif[i - 1] + [-2, -1, 1, 2, 0][Math.floor(r() * 5)]);
-    this.motifShift = [0, ...Array.from({ length: 3 }, () => [-2, -1, 1, 2, 3][Math.floor(r() * 5)])];
-    // A slow line that moves once a beat.
-    this.lyric = [];
-    let l = 0;
-    for (let b = 0; b < 4; b++) {
-      l = Math.max(-4, Math.min(4, l + [-2, -1, 1, 2][Math.floor(r() * 4)]));
-      for (let i = 0; i < 4; i++) this.lyric.push(l);
-    }
-    this.arpMode = Math.floor(r() * 3);
+    this.tLoop?.reseed();
+    this.xLoop?.reseed();
     this.lift = 0;
     this.buildCycle(true);
     this.chordIndex = 0;
@@ -745,7 +840,7 @@ export class Sequencer {
   /** Set up the next pass of the progression. Variation may switch progression and substitute chords. */
   private buildCycle(first: boolean): void {
     const r = this.rng;
-    const v = this.held("chords") || first ? 0 : this.state.chordVariation;
+    const v = this.held("chords") || first ? 0 : this.vary(this.state.chordVariation);
     // Déjà vu, as on Marbles: how likely each change is to replay what this slot did last time instead of something new.
     const dv = this.state.chordDejaVu;
     const list = this.progressions();
@@ -762,7 +857,7 @@ export class Sequencer {
       return (this.memory[i] = r() < v * 0.45 ? this.substitute(c) : c);
     });
     if (first) this.rhythmPick = 0;
-    else if (!this.held("chords") && r() < this.state.chordRhythm * 0.6 * (1 - dv)) this.rhythmPick = Math.floor(r() * 4);
+    else if (!this.held("chords") && r() < this.vary(this.state.chordRhythm) * 0.6 * (1 - dv)) this.rhythmPick = Math.floor(r() * 4);
     this.layout();
     // Epic's wildcard: some passes lift the whole song up a step or two, then it comes home.
     if (this.state.chordStyle === "epic" && !first && !this.held("chords")) {
@@ -861,12 +956,12 @@ export class Sequencer {
     this.fillRequested = false;
     const s = this.state;
     const style = STYLES[s.style] ?? STYLES.broken;
-    const drumV = Math.max(s.kickVariation, s.snareVariation, s.hatVariation);
+    const drumV = this.vary(Math.max(s.kickVariation, s.snareVariation, s.hatVariation));
     if (!this.fillBar && drumV > 0.15 && this.bar % 4 === 3 && this.rng() < drumV * style.fills) this.fillBar = true;
     const r = this.rng;
     if (!this.held("drums")) {
       DRUMS.forEach((d, i) => {
-        const v = this.num(`${d.key}Variation`);
+        const v = this.vary(this.num(`${d.key}Variation`));
         const dv: DrumVariation = { nudge: 0, ghost: new Map<number, number>(), drop: new Set<number>(), chaos: null };
         const len = this.length(d.key);
         const start = this.rotation(d.key);
@@ -897,25 +992,12 @@ export class Sequencer {
     }
     if (!this.held("bass")) {
       for (let i = 0; i < STEPS; i++) {
-        if (r() < s.bassVariation * 0.3) this.bassGate[i] = r();
-        if (r() < s.bassVariation * 0.35) this.bassPick[i] = r();
+        if (r() < this.vary(s.bassVariation) * 0.3) this.bassGate[i] = r();
+        if (r() < this.vary(s.bassVariation) * 0.35) this.bassPick[i] = r();
       }
     }
     if (!this.held("chords")) {
-      for (let i = 0; i < STEPS; i++) if (r() < s.chordRhythm * 0.3 * (1 - s.chordDejaVu)) this.chordGate[i] = r();
-    }
-    if (!this.held("melody")) {
-      for (let i = 0; i < STEPS; i++) {
-        if (r() < MELODY_DRIFT * 0.25) this.melodyGate[i] = r();
-        if (r() < MELODY_DRIFT * 0.2) this.degree[i] = Math.max(-8, Math.min(8, this.degree[i] + (r() < 0.5 ? -1 : 1) * (r() < 0.3 ? 2 : 1)));
-      }
-      if (r() < MELODY_DRIFT * 0.5) this.motif[1 + Math.floor(r() * 3)] += r() < 0.5 ? -1 : 1;
-      if (r() < MELODY_DRIFT * 0.4) this.motifShift[1 + Math.floor(r() * 3)] = [-2, -1, 1, 2, 3][Math.floor(r() * 5)];
-      if (r() < MELODY_DRIFT * 0.4) {
-        const b = Math.floor(r() * 4);
-        const l = Math.max(-5, Math.min(5, this.lyric[b * 4] + (r() < 0.5 ? -1 : 1)));
-        for (let i = 0; i < 4; i++) this.lyric[b * 4 + i] = l;
-      }
+      for (let i = 0; i < STEPS; i++) if (r() < this.vary(s.chordRhythm) * 0.3 * (1 - s.chordDejaVu)) this.chordGate[i] = r();
     }
     this.version++;
   }
@@ -959,7 +1041,8 @@ export class Sequencer {
       engine: Math.max(0, engine),
       harmonics: n("Harmonics"), timbre: n("Timbre"), morph: n("Morph"),
       timbreEnv: n("TimbreEnv"), morphEnv: n("MorphEnv"), decay: n("Decay"), colour: n("Colour"),
-      glide: track === "chords" ? 0 : n("Glide"),
+      // Steps below the middle is Marbles' smooth side: the melody slides between its notes.
+      glide: track === "chords" ? 0 : track === "melody" ? Math.max(n("Glide"), 0.75 * this.melodySmooth) : n("Glide"),
       attack: track === "bass" ? 0 : n("Attack"),
       sub: track === "bass" ? s.bassSub : 0,
       inversion: chords ? s.chordInversion : 0.5,
@@ -972,6 +1055,16 @@ export class Sequencer {
   /** Whether a part is frozen, by its own Hold or the global one. */
   held(part: "drums" | "bass" | "chords" | "melody"): boolean {
     return this.state.hold || this.state[`${part}Hold`];
+  }
+
+  /** A part's density after Energy, which pushes every density down or up; a part set to none stays silent. */
+  dens(v: number): number {
+    return v <= 0 ? 0 : Math.max(0, Math.min(1, v + (this.state.energy - 0.5) * 0.7));
+  }
+
+  /** A part's variation after Evolve, which scales every variation: none at 0, double at 1. */
+  vary(v: number): number {
+    return Math.max(0, Math.min(1, v * this.state.evolve * 2));
   }
 
   // ---- Drums ----------------------------------------------------------------
@@ -987,7 +1080,7 @@ export class Sequencer {
 
   /** How many euclidean hits a drum track has at its density; density is per bar, so longer patterns get more. */
   pulses(key: DrumKey): number {
-    const d = this.num(`${key}Density`);
+    const d = this.dens(this.num(`${key}Density`));
     const max = DRUMS.find((x) => x.key === key)!.max;
     const len = this.length(key);
     return d <= 0 ? 0 : Math.max(1, Math.min(len, Math.round((d * max * len) / STEPS)));
@@ -1026,7 +1119,7 @@ export class Sequencer {
     const s = this.state;
     const mode = this.mode(d.key);
     const len = this.length(d.key), rot = this.rotation(d.key), pulses = this.pulses(d.key);
-    const fill = this.num(`${d.key}Fill`);
+    const fill = this.dens(this.num(`${d.key}Fill`));
     const cache = this.drumCache[i];
     const key = `${mode}|${len}|${rot}|${pulses}|${fill}|${s.gridsX}|${s.gridsY}`;
     if (cache.key === key) return cache;
@@ -1075,7 +1168,7 @@ export class Sequencer {
     if (mode !== "euclid") {
       // On the map, a step's weight is its loudness, and Variation's chaos can push it over or under the line.
       const w = levels[this.mapStep(pos)];
-      const fillAmount = this.num(`${d.key}Fill`);
+      const fillAmount = this.dens(this.num(`${d.key}Fill`));
       const jiggled = w + (dv.chaos?.[pos] ?? 0);
       const mapOn = fillAmount > 0 && w > 0.05 && jiggled > gridsThreshold(fillAmount);
       const euclidOn = euclidHits[pos];
@@ -1115,11 +1208,6 @@ export class Sequencer {
     this.version++;
   }
 
-  /** Pitch classes of the chord being scheduled. */
-  private chordPcs(c: Chord): Set<number> {
-    return new Set(c.tones.map((t) => mod(this.key + c.root + t, 12)));
-  }
-
   /** Voice a chord near the last one, so the changes move smoothly. */
   private voice(c: Chord): number[] {
     const pc = mod(this.key + c.root, 12);
@@ -1147,7 +1235,7 @@ export class Sequencer {
     if (this.isChange(a)) return true;
     const style = CHORD_STYLES[s.chordStyle] ?? CHORD_STYLES.pop;
     const step = a % STEPS;
-    return this.chordGate[step] < chance(style.rhythm[step], s.chordDensity);
+    return this.chordGate[step] < chance(style.rhythm[step], this.dens(s.chordDensity));
   }
 
   // ---- Bass -------------------------------------------------------------------
@@ -1158,7 +1246,7 @@ export class Sequencer {
     const style = BASS_STYLES[s.bassStyle] ?? BASS_STYLES.pulse;
     if (style.onChange && this.isChange(a)) return true;
     const step = a % STEPS;
-    return this.bassGate[step] < chance(style.weights[step], s.bassDensity);
+    return this.bassGate[step] < chance(style.weights[step], this.dens(s.bassDensity));
   }
 
   private bassNote(a: number, c: Chord, next: Chord): number {
@@ -1198,105 +1286,142 @@ export class Sequencer {
   }
 
   // ---- Melody -----------------------------------------------------------------
+  //
+  // After Marbles: a clock ticks at the melody's Rate; on each tick the rhythm
+  // loop decides whether a note plays, and each note takes the next value of the
+  // note loop, shapes it with Spread and Bias and snaps it to the notes Steps
+  // allows. Déjà vu decides how often each loop takes a new value.
 
-  private melodyWeight(step: number): number {
+  /** Déjà vu after Evolve: below the middle Evolve leans towards a locked loop, above it towards fresh values. */
+  private dejaVu(): number {
+    const { melodyDejaVu: dv, evolve } = this.state;
+    if (evolve < 0.5) return dv + (0.5 - dv) * (1 - evolve * 2);
+    const more = (evolve - 0.5) * 2;
+    return dv <= 0.5 ? dv * (1 - more) : dv + (1 - dv) * more;
+  }
+
+  /** Set both loops from the controls. */
+  private setLoops(): void {
     const s = this.state;
-    if (s.melodyStyle === "lyrical") return MELODY_WEIGHT[step] ** 2;
-    const g = s.melodyGroove;
-    return MELODY_WEIGHT[step] * (1 - g) + GROOVE_WEIGHT[step] * g;
+    const dv = this.dejaVu();
+    this.tLoop.dejaVu = s.melodyLoop === "notes" ? 0 : dv;
+    this.xLoop.dejaVu = s.melodyLoop === "rhythm" ? 0 : dv;
+    this.tLoop.setLength(s.melodyLength);
+    this.xLoop.setLength(s.melodyLength);
+    this.distribution.set(s.melodySpread, s.melodyBias);
   }
 
-  private melodyOn(step: number, fill: boolean): boolean {
+  /** Sixteenths per tick of the melody's clock. */
+  get melodyDiv(): number {
+    return MELODY_RATES[this.state.melodyRate] ?? 2;
+  }
+
+  /** Whether tick number `tick` plays, from its rhythm-loop value and (for Bursts) whether the last tick did. */
+  private tickOn(tick: number, u: number, lastOn: boolean): boolean {
     const s = this.state;
-    if (!this.audible("melody")) return false;
-    const density = fill && step >= 12 ? Math.min(1, s.melodyDensity + 0.2) : s.melodyDensity;
-    // With groove, the second half-bar answers the first with the same rhythm.
-    const gate = s.melodyGroove > 0.45 && step >= 8 ? this.melodyGate[step - 8] : this.melodyGate[step];
-    return gate < chance(this.melodyWeight(step), density);
+    const density = this.dens(s.melodyDensity);
+    if (density <= 0) return false;
+    switch (s.melodyRhythm) {
+      case "steady":
+        return STEADY[Math.min(STEADY.length - 1, Math.round(density * (STEADY.length - 1)))][tick % 8] === "1";
+      case "bursts":
+        // Notes come in runs: after a note, another is likely; after a rest, a new run is rarer.
+        return u < (lastOn ? 0.35 + 0.6 * density : 0.6 * density * density);
+      default: {
+        // A coin toss, weighted a little towards the beat.
+        const step = (tick * this.melodyDiv) % STEPS;
+        return u < chance(0.55 + 0.45 * MELODY_WEIGHT[step], density);
+      }
+    }
   }
 
-  private scaleSteps(): number[] {
-    return SCALES[this.state.scale]?.steps ?? SCALES.minorPent.steps;
+  /** The notes the melody may use over a chord, as weights per pitch class. */
+  private melodyWeights(c: Chord): Uint8Array {
+    return pitchWeights(mod(this.key, 12), this.scaleSteps(), mod(this.key + c.root, 12), c.tones);
   }
 
-  /** MIDI note for a melody degree; degree 0 is the root near middle C. */
-  degreeNote(d: number): number {
-    const steps = this.scaleSteps();
-    const octave = Math.floor(d / steps.length);
-    const idx = d - octave * steps.length;
+  /** The lowest note of the melody's range and how many semitones it covers, centred on the key's root near middle C. */
+  private melodyRange(): { low: number; span: number } {
     const key = mod(this.key, 12);
-    const root = key > 6 ? key - 12 : key;
-    return 60 + root + octave * 12 + steps[idx];
+    const root = 60 + (key > 6 ? key - 12 : key);
+    const span = this.state.melodyOctaves * 12;
+    return { low: root - span / 2, span };
   }
 
-  /** The nearest scale degree that's in the chord, if one is close. */
-  private snap(d: number, pcs: Set<number>, half: number): number {
-    for (const off of [0, 1, -1, 2, -2, 3, -3]) {
-      const t = d + off;
-      if (Math.abs(t) <= half && pcs.has(mod(this.degreeNote(t), 12))) return t;
-    }
-    return d;
+  /** A note from a note-loop value over a chord, and where it sits in the range. */
+  private marblesNote(u: number, weights: Uint8Array): { note: number; x: number; raw: number } {
+    const { low, span } = this.melodyRange();
+    const raw = this.distribution.sample(u);
+    const note = quantize(low + raw * span, weights, stepsLevel(this.state.melodySteps));
+    return { note, x: Math.min(1, Math.max(0, (note - low) / span)), raw };
   }
 
-  /** Scale degree of the chord's root nearest the melody's centre, for moving the motif with the harmony. */
-  private chordDegree(c: Chord): number {
-    const pc = mod(this.key + c.root, 12);
-    const len = this.scaleSteps().length;
-    for (let d = 0; d < len; d++) {
-      if (mod(this.degreeNote(d), 12) === pc) return d > len / 2 ? d - len : d;
-    }
-    return 0;
-  }
-
-  /** The note the melody plays at a step over a chord, and where it sits in the range. */
-  private melodyNote(step: number, c: Chord): { note: number; x: number } {
+  /** Play the melody's tick at absolute sixteenth `a`, if it has one there. */
+  private melodyTick(a: number, time: number, c: Chord, events: NoteEvent[]): void {
     const s = this.state;
-    const half = Math.max(1, Math.floor(s.melodyRange / 2));
-    const pcs = this.chordPcs(c);
-    if (s.melodyStyle === "arp") {
-      const ladder: number[] = [];
-      for (let d = -half; d <= half; d++) {
-        const n = this.degreeNote(d);
-        if (pcs.has(mod(n, 12)) && !ladder.includes(n)) ladder.push(n);
-      }
-      if (ladder.length === 0) for (let d = -half; d <= half; d++) ladder.push(this.degreeNote(d));
-      const L = ladder.length;
-      let idx: number;
-      if (this.arpMode === 0) idx = step % L;
-      else if (this.arpMode === 1) idx = L - 1 - (step % L);
-      else {
-        const period = Math.max(1, 2 * L - 2);
-        const p = step % period;
-        idx = p < L ? p : period - p;
-      }
-      return { note: ladder[idx], x: L > 1 ? idx / (L - 1) : 0.5 };
-    }
-    let d: number;
-    if (s.melodyStyle === "motif") d = this.motif[step % 4] + this.motifShift[Math.floor(step / 4)] + this.chordDegree(c);
-    else if (s.melodyStyle === "lyrical") d = this.lyric[step];
-    else d = this.degree[step];
-    d = Math.max(-half, Math.min(half, d));
-    if (s.melodyStyle === "lyrical" || MELODY_WEIGHT[step] >= 0.75) d = this.snap(d, pcs, half);
-    return { note: this.degreeNote(d), x: (d + half) / (2 * half) };
+    const div = this.melodyDiv;
+    if (a % div !== 0) return;
+    this.setLoops();
+    const held = this.held("melody");
+    const seed = this.tLoop.next(held);
+    const tick = Math.floor(a / div);
+    const on = this.tickOn(tick, spread(seed, 0), this.burstOn);
+    this.burstOn = on;
+    if (!on) return;
+    const { note: n, x } = this.marblesNote(this.xLoop.next(held), this.melodyWeights(c));
+    if (!this.audible("melody")) return;
+    const note = n + 12 * s.melodyOctave;
+    const step = a % STEPS;
+    const velocity = Math.min(1, 0.5 + 0.3 * MELODY_WEIGHT[step] + 0.2 * spread(seed, 2));
+    // Jitter, as on Marbles, makes the clock wander: each note lands a little early or late.
+    const len = this.stepLength * div;
+    const jitter = s.melodyJitter ** 2 * 0.45 * (spread(seed, 1) * 2 - 1) * len;
+    const t = Math.max(this.audio.ctx?.currentTime ?? 0, time + jitter);
+    events.push({ note, velocity, role: "tone", x, source: "sequencer" });
+    if (s.sound) this.audio.note("melody", [note], velocity, t, len * (0.15 + 1.35 * s.melodyLegato));
   }
 
-  /** The melody of the bar that's playing, for the view. */
-  melodyBar(): MelodyNote[] {
-    const out: MelodyNote[] = [];
-    const c = this.chord;
-    for (let i = 0; i < STEPS; i++) {
-      if (!this.melodyOn(i, this.fillBar)) continue;
-      const { x } = this.melodyNote(i, c);
-      out.push({ step: i, x, length: this.melodyGap(i), velocity: 0.5 + 0.4 * this.melodyWeight(i) });
+  /** The melody's two loops as they stand, for the view. */
+  melodyLoop(): MelodyLoop {
+    this.setLoops();
+    const L = this.tLoop.length;
+    const weights = this.melodyWeights(this.chord);
+    const ticks: MelodyLoop["ticks"] = [];
+    let last = false;
+    for (let k = 0; k < L; k++) {
+      const seed = this.tLoop.cell(k);
+      const on: boolean = this.audible("melody") && this.tickOn(k, spread(seed, 0), last);
+      last = on;
+      ticks.push({ on, velocity: 0.5 + 0.5 * spread(seed, 2) });
+    }
+    const notes: MelodyLoop["notes"] = [];
+    for (let k = 0; k < this.xLoop.length; k++) {
+      const { x, raw } = this.marblesNote(this.xLoop.cell(k), weights);
+      notes.push({ x, raw });
+    }
+    return { ticks, notes, tick: this.melodyCursor.tick, note: this.melodyCursor.note };
+  }
+
+  /** Which notes the melody may play over the sounding chord at its Steps, as 0..1 heights in its range, with their weights. */
+  melodyLadder(): { x: number; weight: number }[] {
+    const { low, span } = this.melodyRange();
+    const weights = this.melodyWeights(this.chord);
+    const level = stepsLevel(this.state.melodySteps);
+    const out: { x: number; weight: number }[] = [];
+    for (let n = Math.ceil(low); n <= low + span; n++) {
+      const pc = mod(n, 12);
+      if (quantize(n, weights, level) === n) out.push({ x: (n - low) / span, weight: weights[pc] });
     }
     return out;
   }
 
-  private melodyGap(step: number): number {
-    const cap = this.state.melodyStyle === "lyrical" ? 8 : 4;
-    let gap = 1;
-    while (gap < cap && step + gap < STEPS && !this.melodyOn(step + gap, this.fillBar)) gap++;
-    return gap;
+  /** How much the melody glides between notes, from the smooth half of Steps. */
+  get melodySmooth(): number {
+    return smoothness(this.state.melodySteps);
+  }
+
+  private scaleSteps(): number[] {
+    return SCALES[this.state.scale]?.steps ?? SCALES.minorPent.steps;
   }
 
   // ---- Transport ----------------------------------------------------------------
@@ -1318,6 +1443,7 @@ export class Sequencer {
     this.playing = false;
     this.current = -1;
     this.drumCurrent = DRUMS.map(() => -1);
+    this.melodyCursor = { tick: -1, note: -1 };
     this.queue = [];
     this.chordIndex = 0;
     window.clearInterval(this.timer);
@@ -1381,19 +1507,9 @@ export class Sequencer {
         if (s.sound) this.audio.note("chords", notes, velocity, t, len * Math.max(0.6, gap * style.legato));
       }
 
-      if (this.melodyOn(step, this.fillBar)) {
-        const { note: degreeNote, x } = this.melodyNote(step, c);
-        const note = degreeNote + 12 * s.melodyOctave;
-        const w = this.melodyWeight(step);
-        const velocity = Math.min(1, 0.5 + 0.4 * w + (s.melodyGroove > 0.3 && GROOVE_WEIGHT[step] > 0.8 ? 0.1 : 0));
-        // Hold the note until the next one; Groove clips it shorter.
-        const gap = this.melodyGap(step);
-        const hold = Math.max(0.35, gap * (1 - 0.55 * s.melodyGroove));
-        events.push({ note, velocity, role: "tone", x, source: "sequencer" });
-        if (s.sound) this.audio.note("melody", [note], velocity, t, len * hold * 0.95);
-      }
+      this.melodyTick(a, t, c, events);
 
-      this.queue.push({ time: t, step, drumSteps, chord: this.schedChord, events });
+      this.queue.push({ time: t, step, drumSteps, chord: this.schedChord, melody: { tick: this.tLoop.position, note: this.xLoop.position }, events });
       this.nextTime += len;
       this.abs++;
     }
@@ -1408,6 +1524,7 @@ export class Sequencer {
       const q = this.queue.shift()!;
       this.current = q.step;
       this.drumCurrent = q.drumSteps;
+      this.melodyCursor = q.melody;
       if (q.chord !== this.chordIndex) {
         this.chordIndex = q.chord;
         this.version++;

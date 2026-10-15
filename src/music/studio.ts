@@ -3,6 +3,7 @@ import { noteHue } from "../models/lib/music";
 import { paintRange, renderParamControls, type ParamControls } from "../ui/controls";
 import type { Grade } from "../ui/grade";
 import { knob, fader, type Dial } from "../ui/knob";
+import { segmented } from "../ui/segmented";
 import { AudioEngine, BeatDetector, type DrumKind, type SynthTrack, type TrackKey } from "./audio";
 import { dispatchMidi, openMidi, type MidiInputs } from "./midi";
 import { applyModulation, macroSpecs, modulatable, ModSources, SOURCES, sourceLabel, type NumberSpec } from "./modulation";
@@ -11,7 +12,7 @@ import {
   type GlobalPreset,
 } from "./globals";
 import {
-  BASS_STYLES, CHORD_STYLES, ENGINE_CHOICES, SOUND_DEFAULTS, WOBBLE_RATE_LABELS, DRUM_MODES, DRUM_RESETS, DRUMS, ECHO_TIME_LABELS, MAX_DRUM_LENGTH, MELODY_STYLES, ROOTS, SCALES,
+  BASS_STYLES, CHORD_STYLES, ENGINE_CHOICES, SOUND_DEFAULTS, WOBBLE_RATE_LABELS, DRUM_MODES, DRUM_RESETS, DRUMS, ECHO_TIME_LABELS, MAX_DRUM_LENGTH, MELODY_LOOPS, MELODY_PRESETS, MELODY_RATE_LABELS, MELODY_RATES, MELODY_RHYTHMS, ROOTS, SCALES, SOUND_PRESETS,
   STEPS, STYLES, TRACKS, Sequencer, applyStyleDensities, chordName, faderGain, sanitizeState, type DrumKey, type SequencerState,
 } from "./sequencer";
 import { GRIDS_COLS, GRIDS_ROWS, gridsName } from "./grids";
@@ -38,6 +39,8 @@ interface GlobalSettings {
   mixerTrack: TrackKey | "master";
   /** The drum voice whose controls are open in the Drums panel. */
   drumVoice: DrumKey;
+  /** Whether each synth track shows its pattern or its sound. */
+  trackViews?: Record<string, string>;
 }
 
 /**
@@ -79,6 +82,9 @@ const signed = (v: number, unit: string) => `${v > 0 ? "+" : ""}${v}${unit}`;
 const decibels = (gain: number) => (gain <= 0.0001 ? "-∞ dB" : `${signed(Number((20 * Math.log10(gain)).toFixed(1)), " dB")}`);
 const panLabel = (v: number) => (Math.abs(v) < 0.005 ? "C" : `${v < 0 ? "L" : "R"}${Math.round(Math.abs(v) * 100)}`);
 const octaves = (v: number) => (v === 0 ? "0" : signed(v, " oct"));
+const STEPS_LABELS = ["Slide", "Scale", "Chord", "Triad", "Root + 5th", "Root"];
+const stepsIndex = (v: number) => 1 + Math.min(4, Math.floor(((v - 0.5) / 0.5) * 5));
+const dejaVuLabel = (v: number) => (v < 0.04 ? "Always new" : v < 0.47 ? `${Math.round((1 - (2 * v - 1) ** 2) * 100)}% repeat` : v <= 0.53 ? "Locked" : "Shuffled");
 const BASS_RANGE_LABELS = ["Root only", "+ octave", "+ fifth", "+ third", "+ low fifth", "+ seventh", "+ passing"];
 /** The drum map pad's height and the margin round its grid, in CSS pixels. */
 const PAD_WIDTH = 150;
@@ -177,9 +183,14 @@ function soundSpecs(prefix: "bass" | "chord" | "melody"): ParamSpec[] {
  */
 const PARTS: { part: string; specs: ParamSpec[] }[] = [
   { part: "Song", specs: [
-    { kind: "number", key: "tempo", label: "Tempo", min: 40, max: 240, step: 1, default: 112, format: (v) => `${v} BPM` },
+    { kind: "number", key: "tempo", label: "Tempo", min: 40, max: 240, step: 1, default: 112, format: (v) => `${v}`,
+      description: "How fast the song plays, in beats per minute." },
     { kind: "number", key: "swing", label: "Swing", min: 0, max: 0.8, step: 0.05, default: 0, format: pct,
       description: "Delays every second sixteenth for a shuffled feel." },
+    { kind: "number", key: "energy", label: "Energy", min: 0, max: 1, step: 0.01, default: 0.5, format: (v) => signedPct((v - 0.5) * 2),
+      description: "Makes every track busier or sparser at once, on top of each track's own Density. The middle plays them as set." },
+    { kind: "number", key: "evolve", label: "Evolve", min: 0, max: 1, step: 0.01, default: 0.5, format: (v) => signedPct((v - 0.5) * 2),
+      description: "How much every track changes as it plays, on top of each one's Variation. All the way down freezes the song; up keeps it moving." },
   ] },
   ...DRUMS.map((d) => ({ part: d.label, specs: drumSpecs(d.key) })),
   { part: "Drum map", specs: [
@@ -228,13 +239,30 @@ const PARTS: { part: string; specs: ParamSpec[] }[] = [
     { kind: "number", key: "chordOctave", label: "Octave", group: "Sound", min: -1, max: 1, step: 1, default: 0, format: octaves },
   ] },
   { part: "Melody", specs: [
-    { kind: "choice", key: "melodyStyle", label: "Style", options: choices(MELODY_STYLES), default: "wander" },
-    { kind: "number", key: "melodyRange", label: "Range", min: 2, max: 16, step: 1, default: 8, format: (v) => `${v} notes`,
-      description: "How many scale notes the melody moves across." },
-    { kind: "number", key: "melodyDensity", label: "Density", min: 0, max: 1, step: 0.01, default: 0.4, format: pct,
-      description: "How many melody notes play." },
-    { kind: "number", key: "melodyGroove", label: "Groove", min: 0, max: 1, step: 0.01, default: 0.3, format: pct,
-      description: "Adds rhythm: syncopated, clipped notes, and the second half-bar answers the first." },
+    { kind: "choice", key: "melodyRhythm", label: "Mode", options: MELODY_RHYTHMS, default: "coin",
+      description: "How ticks of the clock get a note. Coin tosses a coin on each one; Bursts plays notes in runs with rests between; Steady plays regular divisions of the clock." },
+    { kind: "number", key: "melodyRate", label: "Clock", min: 0, max: MELODY_RATES.length - 1, step: 1, default: 2,
+      format: (v) => MELODY_RATE_LABELS[v] ?? String(v), description: "How fast the clock ticks: a half note, a quarter, an eighth or a sixteenth. At most one note plays per tick." },
+    { kind: "number", key: "melodyDensity", label: "Density", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: "How many ticks get a note (Marbles' t Bias)." },
+    { kind: "number", key: "melodyJitter", label: "Jitter", min: 0, max: 1, step: 0.01, default: 0, format: pct,
+      description: "Makes the clock wobble, so notes land a little early or late, like a player who doesn't count." },
+    { kind: "number", key: "melodyLegato", label: "Note length", min: 0, max: 1, step: 0.01, default: 0.5, format: pct,
+      description: "Short and detached to long notes that run into the next." },
+    { kind: "number", key: "melodySpread", label: "Spread", min: 0, max: 1, step: 0.01, default: 0.45, format: pct,
+      description: "How far notes stray from Bias. Low stays on one note, the middle wanders round it, high leaps between the lowest and highest notes." },
+    { kind: "number", key: "melodyBias", label: "Bias", min: 0, max: 1, step: 0.01, default: 0.5,
+      format: (v) => (v < 0.35 ? "Low" : v > 0.65 ? "High" : "Middle"), description: "Where the notes gather: low, middle or high in the range." },
+    { kind: "number", key: "melodySteps", label: "Steps", min: 0, max: 1, step: 0.01, default: 0.7,
+      format: (v) => STEPS_LABELS[v < 0.5 ? 0 : stepsIndex(v)], description: "Which notes the melody may use. Left of the middle it slides between scale notes; right of it, fewer and fewer notes: the chord's notes, then just its root and fifth, then the root." },
+    { kind: "number", key: "melodyOctaves", label: "Range", min: 1, max: 3, step: 0.5, default: 1.5, format: (v) => `${v} oct`,
+      description: "How many octaves the notes cover." },
+    { kind: "number", key: "melodyDejaVu", label: "Déjà vu", min: 0, max: 1, step: 0.01, default: 0.35,
+      format: dejaVuLabel, description: "Marbles' Déjà vu. Left: every note is new. Towards the middle the last few notes come back more and more, until at the middle they loop. Right of the middle the loop plays in a jumbled order." },
+    { kind: "number", key: "melodyLength", label: "Loop length", min: 1, max: 16, step: 1, default: 8, format: (v) => `${v} tick${v === 1 ? "" : "s"}`,
+      description: "How many ticks Déjà vu loops over." },
+    { kind: "choice", key: "melodyLoop", label: "Loops", options: MELODY_LOOPS, default: "both",
+      description: "What Déjà vu repeats: the rhythm and the notes, or only one of them while the other stays fresh." },
     ...soundSpecs("melody"),
     { kind: "number", key: "melodyOctave", label: "Octave", group: "Sound", min: -2, max: 2, step: 1, default: 0, format: octaves },
     { kind: "number", key: "melodyAttack", label: "Attack", group: "Sound", min: 0, max: 1, step: 0.01, default: 0, format: pct,
@@ -347,6 +375,9 @@ export class Studio {
   /** What the melody view and chord chips last drew, to skip redundant redraws. */
   private melodyDrawn = "";
   private chipsDrawn = "";
+  private captionsDrawn = "";
+  /** Melody and sound preset chips, lit while the controls match them. */
+  private presetChips: { button: HTMLButtonElement; values: Partial<SequencerState> }[] = [];
   private meterBars: Record<string, HTMLElement> = {};
   /** Live source bars in the matrix, refreshed while the Modulation tab is open. */
   private sourceMeters: { bar: HTMLElement; source: () => string }[] = [];
@@ -1027,14 +1058,16 @@ export class Studio {
       if (/^(kick|snare|hat)(Length|Density|Rotate)$/.test(spec.key) || /^(echo|space|master)/.test(spec.key)) this.refreshSeqControls();
       if (/^(kick|snare|hat)Mode$/.test(spec.key)) this.showDrumModes();
       this.seq.version++;
+      this.showPresetChips();
       this.saveGlobal();
     };
     const render = (box: HTMLElement, specs: ParamSpec[]) => {
       const c = renderParamControls(box, specs, values, changed, "gen:");
       this.seqControls.push(c);
-      // The panel is short, so descriptions show as tooltips instead of under each control.
+      // The panel is short, so descriptions show in the hint line at the top instead of under each control.
       for (const row of box.querySelectorAll<HTMLElement>(".param[data-target]")) {
-        row.title = specs.find((p) => `gen:${p.key}` === row.dataset.target)?.description ?? "";
+        const p = specs.find((x) => `gen:${x.key}` === row.dataset.target);
+        if (p?.description) row.dataset.hint = `${p.label}: ${p.description}`;
       }
     };
     const specsOf = (part: string) => PARTS.find((p) => p.part === part)!.specs;
@@ -1179,11 +1212,202 @@ export class Studio {
     render($("bass-sound"), soundOf("Bass"));
     render($("chord-controls"), patternOf("Chords"));
     render($("chord-sound"), soundOf("Chords"));
-    render($("melody-controls"), patternOf("Melody"));
     render($("melody-sound"), soundOf("Melody"));
     render($("master-controls"), specsOf("Master"));
-    this.melodyCtx = $<HTMLCanvasElement>("melody-view").getContext("2d");
+    this.buildMelody(values, changed, render, specsOf("Melody"));
+    this.buildSoundPresets();
+    this.buildTrackTools();
+    this.buildHints();
+    this.showPresetChips();
     this.selectTrack(s.mixerTrack);
+  }
+
+  /**
+   * The melody panel, laid out like Marbles: the marbles view with its
+   * presets, then the rhythm (Marbles' t section), the notes (its X section)
+   * and Déjà vu.
+   */
+  private buildMelody(
+    values: ParamValues, changed: (spec: ParamSpec) => void, render: (box: HTMLElement, specs: ParamSpec[]) => void, specs: ParamSpec[],
+  ): void {
+    const seq = this.settings.seq;
+    const pick = (keys: string[]) => keys.map((k) => specs.find((p) => p.key === k)!);
+    const seg = (box: HTMLElement, key: string, labels?: string[]) => {
+      const d = segmented(pick([key])[0], values, changed, "gen:", labels);
+      this.seqControls.push(d);
+      box.append(d.el);
+    };
+    const sliders = (box: HTMLElement, keys: string[]) => {
+      const inner = el("div");
+      box.append(inner);
+      render(inner, pick(keys));
+    };
+    const rhythm = $("melody-rhythm");
+    seg(rhythm, "melodyRhythm");
+    seg(rhythm, "melodyRate", MELODY_RATE_LABELS);
+    sliders(rhythm, ["melodyDensity", "melodyJitter"]);
+    sliders($("melody-notes"), ["melodySpread", "melodyBias", "melodySteps", "melodyOctaves", "melodyLegato"]);
+    const loop = $("melody-loop");
+    sliders(loop, ["melodyDejaVu", "melodyLength"]);
+    seg(loop, "melodyLoop");
+
+    // Presets: a few settings of the controls above, to start from.
+    const box = $("melody-presets");
+    for (const p of MELODY_PRESETS) {
+      const b = el("button", { type: "button", className: "small preset-chip", textContent: p.label });
+      b.dataset.hint = `${p.label}: ${p.hint}.`;
+      b.addEventListener("click", () => {
+        Object.assign(seq, p.values);
+        this.seqChanged();
+        b.blur();
+      });
+      box.append(b);
+      this.presetChips.push({ button: b, values: p.values });
+    }
+
+    // The view doubles as an X/Y pad for the distribution: up and down is Bias, across is Spread.
+    const canvas = $<HTMLCanvasElement>("melody-view");
+    this.melodyCtx = canvas.getContext("2d");
+    const move = (e: PointerEvent) => {
+      const r = canvas.getBoundingClientRect();
+      seq.melodySpread = Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * 100) / 100;
+      seq.melodyBias = Math.round(Math.max(0, Math.min(1, 1 - (e.clientY - r.top) / r.height)) * 100) / 100;
+      this.seq.version++;
+      this.refreshSeqControls();
+    };
+    let dragging = false;
+    canvas.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      canvas.setPointerCapture(e.pointerId);
+      move(e);
+    });
+    canvas.addEventListener("pointermove", (e) => { if (dragging) move(e); });
+    const end = () => {
+      if (!dragging) return;
+      dragging = false;
+      this.saveGlobal();
+    };
+    canvas.addEventListener("pointerup", end);
+    canvas.addEventListener("pointercancel", end);
+  }
+
+  /** Named sounds above each synth track's sound controls. */
+  private buildSoundPresets(): void {
+    const seq = this.settings.seq;
+    for (const box of this.seqTab.querySelectorAll<HTMLElement>(".sound-presets")) {
+      const track = box.dataset.track as SynthTrack;
+      for (const p of SOUND_PRESETS[track]) {
+        const b = el("button", { type: "button", className: "small preset-chip", textContent: p.label });
+        b.dataset.hint = `${p.label}: a starting sound. Tweak the controls below to make it your own.`;
+        b.addEventListener("click", () => {
+          Object.assign(seq, p.values);
+          this.seqChanged();
+          b.blur();
+        });
+        box.append(b);
+        this.presetChips.push({ button: b, values: p.values });
+      }
+    }
+  }
+
+  /** Each track's Pattern / Sound switch and its die. */
+  private buildTrackTools(): void {
+    const s = this.settings;
+    s.trackViews ??= {};
+    for (const sw of this.seqTab.querySelectorAll<HTMLElement>(".view-switch")) {
+      const track = sw.dataset.track!;
+      const body = sw.closest<HTMLElement>(".track-body")!;
+      const show = () => {
+        const view = s.trackViews![track] === "sound" ? "sound" : "pattern";
+        for (const b of sw.querySelectorAll<HTMLElement>("button")) b.classList.toggle("active", b.dataset.view === view);
+        for (const cols of body.querySelectorAll<HTMLElement>(".track-cols[data-view]")) cols.hidden = cols.dataset.view !== view;
+        this.melodyDrawn = "";
+      };
+      for (const b of sw.querySelectorAll<HTMLButtonElement>("button")) {
+        b.dataset.hint = b.dataset.view === "sound"
+          ? "Sound: pick how this track sounds, from a named sound or the synth's own controls."
+          : "Pattern: what this track plays and how it changes.";
+        b.addEventListener("click", () => {
+          s.trackViews![track] = b.dataset.view!;
+          show();
+          this.saveGlobal();
+          b.blur();
+        });
+      }
+      show();
+    }
+    for (const t of TRACKS) {
+      const b = $<HTMLButtonElement>(`dice-${t.key}`);
+      b.innerHTML = `${DICE_ICON}<span>New</span>`;
+      b.addEventListener("click", () => {
+        if (t.key === "drums") this.rollDrums();
+        this.seq.reroll(t.key);
+        this.seqChanged();
+        b.blur();
+      });
+    }
+  }
+
+  /** A new beat in the style's spirit: each drum gets new hits and a new offset, and the drum map a new spot. */
+  private rollDrums(): void {
+    const seq = this.settings.seq as unknown as Record<string, number>;
+    const style = STYLES[this.settings.seq.style] ?? STYLES.broken;
+    const r = Math.random;
+    for (const d of DRUMS) {
+      // Around the style's own count, give or take a few.
+      const hits = Math.max(1, Math.min(d.max, Math.round(style.hits[d.key] + (r() - 0.4) * (d.key === "hat" ? 8 : 3))));
+      seq[`${d.key}Density`] = Math.round((hits / d.max) * 100) / 100;
+      // The kick keeps the downbeat; the others can start anywhere.
+      seq[`${d.key}Rotate`] = d.key === "kick" ? 0 : Math.floor(r() * STEPS);
+    }
+    seq.gridsX = Math.round(Math.max(0, Math.min(1, style.map[0] + (r() - 0.5) * 0.5)) * 100) / 100;
+    seq.gridsY = Math.round(Math.max(0, Math.min(1, style.map[1] + (r() - 0.5) * 0.5)) * 100) / 100;
+  }
+
+  /** After a preset or a die changed several controls at once: show them, and save. */
+  private seqChanged(): void {
+    this.seq.version++;
+    this.refreshSeqControls();
+    this.saveGlobal();
+  }
+
+  /**
+   * The hint line in the tab bar: whatever the pointer is over says what it
+   * does there, so the sequencer's controls explain themselves without a
+   * paragraph under each one. Tooltips are moved into it as they're met.
+   */
+  private buildHints(): void {
+    const hint = $("dock-hint");
+    const idle = "Hover over anything to see what it does. New here? Press Play, then try New idea, or a melody preset.";
+    let shown = "";
+    const show = (text: string) => {
+      if (text === shown) return;
+      shown = text;
+      hint.textContent = text;
+      hint.classList.toggle("idle", text === idle);
+    };
+    const tab = this.seqTab;
+    tab.addEventListener("mouseover", (e) => {
+      let node = e.target as HTMLElement | null;
+      while (node && node !== tab) {
+        if (node.title) {
+          node.dataset.hint = node.title;
+          node.removeAttribute("title");
+        }
+        if (node.dataset.hint) return show(node.dataset.hint);
+        node = node.parentElement;
+      }
+      show(idle);
+    });
+    tab.addEventListener("mouseleave", () => show(idle));
+    const update = () => show(tab.hidden ? "" : idle);
+    for (const t of document.querySelectorAll<HTMLButtonElement>("#dock-tabs [data-tab]")) t.addEventListener("click", update);
+    // The buttons up here explain themselves too.
+    for (const b of [$("seq-play"), $("seq-mute")]) {
+      b.addEventListener("mouseenter", () => { if (!tab.hidden) show(b.id === "seq-play" ? "Play or stop the sequencer (Space pauses everything)." : b.title); });
+      b.addEventListener("mouseleave", update);
+    }
+    update();
   }
 
   /** The mixer: a strip per track and a master strip. Clicking a strip opens its controls. */
@@ -1275,6 +1499,16 @@ export class Studio {
 
   private refreshSeqControls(): void {
     for (const c of this.seqControls) c.refresh();
+    this.showPresetChips();
+  }
+
+  /** Light the preset chips whose settings match the controls. */
+  private showPresetChips(): void {
+    const seq = this.settings.seq as unknown as Record<string, unknown>;
+    for (const { button, values } of this.presetChips) {
+      const on = Object.entries(values).every(([k, v]) => (typeof v === "number" ? Math.abs((seq[k] as number) - v) < 1e-6 : seq[k] === v));
+      button.classList.toggle("active", on);
+    }
   }
 
   /** Set a sequencer control from a 0..1 knob position (MIDI CC). */
@@ -1477,6 +1711,7 @@ export class Studio {
     }
     else if (track === "melody") this.drawMelody();
     else if (track === "chords") this.drawChords();
+    if (track !== "master") this.drawCaptions();
   }
 
   private drawRing(): void {
@@ -1570,15 +1805,22 @@ export class Studio {
     }
   }
 
-  /** The melody of the bar as a line of glowing notes, high notes higher. */
+  /**
+   * The melody's marbles: the note loop as dots at their heights (a faint dot
+   * where each value fell before Steps moved it), the rhythm loop as a row of
+   * ticks underneath, the distribution Spread and Bias make down the left, and
+   * the notes Steps allows as lines across.
+   */
   private drawMelody(): void {
     const g = this.melodyCtx;
     if (!g) return;
     const canvas = g.canvas;
-    const seq = this.settings.seq;
+    const seq = this.seq;
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth, h = canvas.clientHeight;
-    const key = [this.seq.version, this.seq.current, this.seq.chordIndex, seq.melodyDensity, seq.melodyRange, seq.melodyGroove, seq.melodyStyle, this.seq.audible("melody"), seq.scale, seq.root, w, h, dpr].join("|");
+    if (w === 0) return;
+    const cur = seq.melodyCursor;
+    const key = [seq.version, cur.tick, cur.note, seq.playing, seq.chordIndex, seq.key, seq.audible("melody"), w, h, dpr].join("|");
     if (key === this.melodyDrawn) return;
     this.melodyDrawn = key;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
@@ -1587,31 +1829,97 @@ export class Studio {
     }
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
-    const col = w / STEPS, pad = 5;
-    const y = (x: number) => pad + (1 - x) * (h - pad * 2);
-    if (this.seq.playing && this.seq.current >= 0) {
-      g.fillStyle = "rgba(42, 212, 255, 0.08)";
-      g.fillRect(this.seq.current * col, 0, col, h);
+    const loop = seq.melodyLoop();
+    const playing = seq.playing;
+    const left = 34, right = w - 6, top = 8, bottom = h - 26;
+    const y = (x: number) => bottom - x * (bottom - top);
+    // The notes Steps allows, the chord's root brightest.
+    for (const n of seq.melodyLadder()) {
+      g.fillStyle = n.weight >= 255 ? "rgba(108, 157, 255, 0.4)" : n.weight >= 160 ? "rgba(108, 157, 255, 0.18)" : "rgba(255, 255, 255, 0.07)";
+      g.fillRect(left, Math.round(y(n.x)) - 0.5, right - left, 1);
     }
-    const notes = this.seq.melodyBar();
-    g.strokeStyle = "rgba(108, 157, 255, 0.4)";
+    // Where notes are likely to land.
+    const pdf = seq.distribution.pdf;
+    g.beginPath();
+    g.moveTo(4, y(0));
+    for (let i = 0; i < pdf.length; i++) g.lineTo(4 + pdf[i] * 24, y((i + 0.5) / pdf.length));
+    g.lineTo(4, y(1));
+    g.closePath();
+    g.fillStyle = "rgba(108, 157, 255, 0.22)";
+    g.fill();
+    g.strokeStyle = "rgba(108, 157, 255, 0.7)";
+    g.lineWidth = 1;
+    g.stroke();
+    // Bias, as a tick on the curve's spine.
+    g.fillStyle = "#6c9dff";
+    g.fillRect(2, y(this.settings.seq.melodyBias) - 1, 6, 2);
+
+    const L = loop.notes.length;
+    const cell = (right - left) / Math.max(1, L);
+    const cx = (k: number) => left + (k + 0.5) * cell;
+    // A faint thread through the loop's notes, in order.
+    g.strokeStyle = "rgba(108, 157, 255, 0.25)";
     g.lineWidth = 1.5;
     g.beginPath();
-    notes.forEach((n, i) => {
-      const x = (n.step + 0.5) * col;
-      if (i === 0) g.moveTo(x, y(n.x));
-      else g.lineTo(x, y(n.x));
-    });
+    loop.notes.forEach((n, k) => (k === 0 ? g.moveTo(cx(k), y(n.x)) : g.lineTo(cx(k), y(n.x))));
     g.stroke();
-    for (const n of notes) {
-      const x = (n.step + 0.5) * col;
-      g.fillStyle = "rgba(108, 157, 255, 0.2)";
-      g.fillRect(x, y(n.x) - 1.5, Math.max(0, (n.length - 0.5) * col), 3);
-      g.fillStyle = n.step === this.seq.current ? "#d2e0ff" : "#6c9dff";
+    const r = Math.max(2.5, Math.min(6, cell * 0.3));
+    loop.notes.forEach((n, k) => {
+      const now = playing && k === loop.note;
+      if (Math.abs(n.raw - n.x) > 0.01) {
+        // Where the value fell, and the note Steps moved it to.
+        g.strokeStyle = "rgba(255, 255, 255, 0.12)";
+        g.beginPath();
+        g.moveTo(cx(k), y(n.raw));
+        g.lineTo(cx(k), y(n.x));
+        g.stroke();
+        g.fillStyle = "rgba(255, 255, 255, 0.25)";
+        g.beginPath();
+        g.arc(cx(k), y(n.raw), 1.5, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.fillStyle = now ? "#e4ecff" : "#6c9dff";
       g.beginPath();
-      g.arc(x, y(n.x), 2 + 2.5 * n.velocity, 0, Math.PI * 2);
+      g.arc(cx(k), y(n.x), now ? r + 1.5 : r, 0, Math.PI * 2);
       g.fill();
-    }
+    });
+    // The rhythm loop: which ticks play.
+    const ty = h - 11;
+    const tick = (right - left) / Math.max(1, loop.ticks.length);
+    loop.ticks.forEach((t, k) => {
+      const x = left + k * tick + 1.5, tw = Math.max(2, tick - 3);
+      const now = playing && k === loop.tick;
+      if (t.on) {
+        g.fillStyle = now ? "#2ad4ff" : `rgba(108, 157, 255, ${0.35 + 0.55 * t.velocity})`;
+        g.fillRect(x, ty - 4, tw, 8);
+      } else {
+        g.strokeStyle = now ? "#2ad4ff" : "rgba(255, 255, 255, 0.12)";
+        g.strokeRect(x + 0.5, ty - 3.5, tw - 1, 7);
+      }
+    });
+  }
+
+  /** One line under each track's title saying, in words, what it's doing. */
+  private drawCaptions(): void {
+    const seq = this.seq;
+    const s = this.settings.seq;
+    const key = [seq.version, s.hold, s.melodyHold, s.energy, s.evolve].join("|");
+    if (key === this.captionsDrawn) return;
+    this.captionsDrawn = key;
+    $("drums-caption").textContent = DRUMS.filter((d) => s[`${d.key}On`]).map((d) => {
+      const mode = s[`${d.key}Mode`];
+      const hits = seq.pulses(d.key);
+      return mode === "grids" ? `${d.label} on the map` : `${d.label} ${hits}${mode === "both" ? " + map" : ""}`;
+    }).join(" · ");
+    $("bass-caption").textContent = ["Root notes only", "Roots and octaves", "Roots, octaves and fifths", "Chord notes", "Chord notes", "Chord notes and sevenths", "Chord and passing notes"][s.bassRange - 1] ?? "";
+    const len = s.melodyLength;
+    const dv = seq.held("melody") ? 0.5 : s.melodyDejaVu;
+    const what = s.melodyLoop === "rhythm" ? " (rhythm only)" : s.melodyLoop === "notes" ? " (notes only)" : "";
+    $("melody-caption").textContent = seq.held("melody") ? `Held: looping ${len} ticks`
+      : dv < 0.04 ? "Every note is new"
+      : dv < 0.47 ? `Repeats ${Math.round((1 - (2 * dv - 1) ** 2) * 100)}% of its last ${len} ticks${what}`
+      : dv <= 0.53 ? `Looping ${len} ticks${what}`
+      : `Shuffling a loop of ${len}${what}`;
   }
 
   /** The progression as chips, with the sounding chord lit. */

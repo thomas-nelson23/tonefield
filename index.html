@@ -86,7 +86,7 @@
             <button type="button" data-tab="modulation">Modulation</button>
             <button type="button" data-tab="midi">MIDI</button>
             <button type="button" data-tab="audio">Audio file</button>
-            <span class="spacer"></span>
+            <span id="dock-hint" class="dock-hint" aria-live="polite"></span>
             <button type="button" id="seq-play" class="primary">Play</button>
             <button type="button" id="seq-mute">Mute</button>
             <span id="midi-led" class="led" title="MIDI activity"></span>
@@ -102,9 +102,9 @@
                 </div>
                 <div id="global-sliders" class="part-sliders"></div>
                 <div class="row-buttons">
-                  <button type="button" id="gen-new" class="small" title="Start from fresh patterns, melody and progression">New idea</button>
-                  <button type="button" id="gen-fill" class="small" title="Play a drum fill at the end of the bar">Fill</button>
-                  <button type="button" id="gen-hold" class="small" title="Freeze every track so it stops evolving">Hold all</button>
+                  <button type="button" id="gen-new" class="small new-idea" data-hint="New idea: start every track from fresh patterns, a new melody and a new progression. Your settings stay.">New idea</button>
+                  <button type="button" id="gen-fill" class="small" data-hint="Fill: play a drum fill at the end of the bar.">Fill</button>
+                  <button type="button" id="gen-hold" class="small" data-hint="Hold all: freeze every track so the song stops changing.">Hold all</button>
                 </div>
               </section>
               <section class="seq-part part-mixer">
@@ -113,7 +113,7 @@
               </section>
               <section class="seq-part part-track">
                 <div class="track-body" data-track="drums">
-                  <header class="part-head"><span class="part-title">Drums</span><span class="part-tools"><button type="button" id="hold-drums" class="small hold" title="Freeze this track so it stops evolving; the others keep changing">Hold</button></span></header>
+                  <header class="part-head"><span class="part-title">Drums</span><span class="part-caption muted" id="drums-caption"></span><span class="part-tools"><button type="button" id="dice-drums" class="small dice-btn" data-hint="New beat: new hits and offsets for each drum and a new spot on the drum map, in the style's spirit."></button><button type="button" id="hold-drums" class="small hold" data-hint="Hold: freeze this track so it stops changing; the others keep evolving.">Hold</button></span></header>
                   <div class="drums-body">
                     <canvas id="drum-ring" title="Click a ring to edit its drum. Drag it round to turn its euclidean hits; double-click to put them back where the style starts them."></canvas>
                     <div id="drum-voices"></div>
@@ -128,24 +128,36 @@
                   </div>
                 </div>
                 <div class="track-body" data-track="bass" hidden>
-                  <header class="part-head"><span class="part-title">Bass</span><span class="part-tools"><button type="button" id="hold-bass" class="small hold" title="Freeze this track so it stops evolving; the others keep changing">Hold</button></span></header>
-                  <div class="track-cols">
+                  <header class="part-head"><span class="part-title">Bass</span><span class="part-caption muted" id="bass-caption"></span><span class="part-tools"><span class="segmented view-switch" data-track="bass"><button type="button" class="small" data-view="pattern">Pattern</button><button type="button" class="small" data-view="sound">Sound</button></span><button type="button" id="dice-bass" class="small dice-btn" data-hint="New bass line: fresh rhythm and notes, same settings."></button><button type="button" id="hold-bass" class="small hold" data-hint="Hold: freeze this track so it stops changing; the others keep evolving.">Hold</button></span></header>
+                  <div class="track-cols" data-view="pattern">
                     <div class="track-col"><span class="section-label">Pattern</span><div id="bass-controls" class="part-sliders"></div></div>
-                    <div class="track-col"><span class="section-label">Synth</span><div id="bass-sound" class="part-sliders cols-3"></div></div>
+                  </div>
+                  <div class="track-cols" data-view="sound" hidden>
+                    <div class="track-col sound-col"><span class="section-label">Sound</span><div class="sound-presets" data-track="bass"></div><div id="bass-sound" class="part-sliders cols-4"></div></div>
                   </div>
                 </div>
                 <div class="track-body" data-track="chords" hidden>
-                  <header class="part-head"><span class="part-title">Chords</span><div id="chord-chips" class="chord-chips"></div><span class="part-tools"><button type="button" id="hold-chords" class="small hold" title="Freeze this track so it stops evolving; the others keep changing">Hold</button></span></header>
-                  <div class="track-cols">
-                    <div class="track-col"><span class="section-label">Pattern</span><div id="chord-controls" class="part-sliders"></div></div>
-                    <div class="track-col"><span class="section-label">Synth</span><div id="chord-sound" class="part-sliders cols-3"></div></div>
+                  <header class="part-head"><span class="part-title">Chords</span><div id="chord-chips" class="chord-chips"></div><span class="part-tools"><span class="segmented view-switch" data-track="chords"><button type="button" class="small" data-view="pattern">Pattern</button><button type="button" class="small" data-view="sound">Sound</button></span><button type="button" id="dice-chords" class="small dice-btn" data-hint="New progression: another of the style's progressions and a fresh comping rhythm."></button><button type="button" id="hold-chords" class="small hold" data-hint="Hold: freeze this track so it stops changing; the others keep evolving.">Hold</button></span></header>
+                  <div class="track-cols" data-view="pattern">
+                    <div class="track-col"><span class="section-label">Pattern</span><div id="chord-controls" class="part-sliders cols-2"></div></div>
+                  </div>
+                  <div class="track-cols" data-view="sound" hidden>
+                    <div class="track-col sound-col"><span class="section-label">Sound</span><div class="sound-presets" data-track="chords"></div><div id="chord-sound" class="part-sliders cols-4"></div></div>
                   </div>
                 </div>
                 <div class="track-body" data-track="melody" hidden>
-                  <header class="part-head"><span class="part-title">Melody</span><span class="part-tools"><button type="button" id="hold-melody" class="small hold" title="Freeze this track so it stops evolving; the others keep changing">Hold</button></span></header>
-                  <div class="track-cols">
-                    <div class="track-col melody-col"><span class="section-label">Pattern</span><canvas id="melody-view"></canvas><div id="melody-controls" class="part-sliders cols-2"></div></div>
-                    <div class="track-col"><span class="section-label">Synth <span class="muted">· a MIDI keyboard plays through it too</span></span><div id="melody-sound" class="part-sliders cols-3"></div></div>
+                  <header class="part-head"><span class="part-title">Melody</span><span class="part-caption muted" id="melody-caption"></span><span class="part-tools"><span class="segmented view-switch" data-track="melody"><button type="button" class="small" data-view="pattern">Pattern</button><button type="button" class="small" data-view="sound">Sound</button></span><button type="button" id="dice-melody" class="small dice-btn" data-hint="New melody: roll fresh marbles into both loops, same settings."></button><button type="button" id="hold-melody" class="small hold" data-hint="Hold: freeze this track so it stops changing; the others keep evolving.">Hold</button></span></header>
+                  <div class="track-cols" data-view="pattern">
+                    <div class="track-col marbles-col">
+                      <canvas id="melody-view" data-hint="The melody's marbles. Each dot is a note in the loop, the curve on the left is where notes are likely to land, and the lines are the notes Steps allows. Drag up and down to move Bias, left and right for Spread."></canvas>
+                      <div id="melody-presets" class="preset-chips"></div>
+                    </div>
+                    <div class="track-col"><span class="section-label">Rhythm</span><div id="melody-rhythm" class="part-sliders"></div></div>
+                    <div class="track-col"><span class="section-label">Notes</span><div id="melody-notes" class="part-sliders"></div></div>
+                    <div class="track-col"><span class="section-label">Déjà vu</span><div id="melody-loop" class="part-sliders"></div></div>
+                  </div>
+                  <div class="track-cols" data-view="sound" hidden>
+                    <div class="track-col sound-col"><span class="section-label">Sound <span class="muted">· a MIDI keyboard plays through it too</span></span><div class="sound-presets" data-track="melody"></div><div id="melody-sound" class="part-sliders cols-4"></div></div>
                   </div>
                 </div>
                 <div class="track-body" data-track="master" hidden>
