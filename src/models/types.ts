@@ -230,7 +230,7 @@ export interface SimulationModel {
 export interface ModelDefinition {
   id: string;
   name: string;
-  category: "Particles" | "Surfaces" | "Custom";
+  category: "Particles" | "Surfaces" | "Shapes" | "Custom";
   description: string;
   /** One line telling the user how to interact with the canvas. */
   hint?: string;

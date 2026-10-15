@@ -1,6 +1,6 @@
 # Tonefield
 
-A music-driven visualizer for the desktop. Five models, each a physics or algorithmic system tuned to look striking, move with the music: a built-in generative band, a MIDI keyboard or controller, or a song you load drives them through their notes, spectrum and loudness, macros and modulation. Pick a model, shape it with sliders, and play with it using the mouse.
+A music-driven visualizer for the desktop. Six models, each a physics or algorithmic system tuned to look striking, move with the music: a built-in generative band, a MIDI keyboard or controller, or a song you load drives them through their notes, spectrum and loudness, macros and modulation. Pick a model, shape it with sliders, and play with it using the mouse.
 
 ![Tonefield playing Plexus along with the sequencer](docs/screenshot.png)
 
@@ -94,8 +94,8 @@ Keyboard: `Space` pause or play the visuals and the music, `Enter` play or stop 
 | Murmuration | Fabric | Living ink |
 | --- | --- | --- |
 | ![Murmuration](docs/screenshots/murmuration.png) | ![Fabric](docs/screenshots/fabric.png) | ![Living ink](docs/screenshots/living-ink.png) |
-| **Cymatics** | **Plexus** | |
-| ![Cymatics](docs/screenshots/cymatics.png) | ![Plexus](docs/screenshots/plexus.png) | |
+| **Cymatics** | **Plexus** | **Facets** |
+| ![Cymatics](docs/screenshots/cymatics.png) | ![Plexus](docs/screenshots/plexus.png) | ![Facets](docs/screenshots/facets.png) |
 
 | Model | What the music does | Interaction |
 | --- | --- | --- |
@@ -104,6 +104,7 @@ Keyboard: `Space` pause or play the visuals and the music, `Enter` play or stop 
 | Living ink | Reaction–diffusion that grows where the spectrum is loud; notes seed blooms, the palette follows the melody | Drag to seed (what you draw stays fed for Brush hold seconds), right-drag to wipe |
 | Cymatics | Glowing sand on a vibrating plate morphs to a new figure with every note; the round plate draws turning mandalas. The plate fills the screen, and with gravity on the sand streams through the figure endlessly | Drag to stir the sand |
 | Plexus | Glowing nodes joined by lines in a pattern you pick: web, constellations, star rings, string art, branches or wave mesh. Nodes spring between patterns, notes fire signals along the lines, kicks burst the shape, the bass bends it | Drag to pull nodes in, right-drag to push them away |
+| Facets | 3D polyhedra (ten shapes, from tetrahedron to torus) turning in glass, solid or wireframe, with nested shells. Every few bars the shape subdivides into a sphere, grows spikes, shatters, folds open or twists and morphs into the next shape. Kicks burst the faces apart, snares knock it spinning, notes light faces by pitch, chords tint the shells, the spectrum grows spikes | Drag to spin it, right-click to burst it apart |
 
 Shift works in place of right-click everywhere.
 
@@ -249,6 +250,7 @@ src/
     reaction.ts      Living ink: Gray-Scott reaction-diffusion
     chladni.ts       Cymatics: sand figures on a vibrating plate
     plexus.ts        Plexus: nodes joined by lines in six patterns
+    facets.ts        Facets: 3D polyhedra that evolve with the music
     lib/grayscott*   Living ink's simulation, run in a Web Worker
     lib/visual.ts    trails / tunnel feedback, glow sprites, colour schemes
     lib/raster.ts    pixel buffer + palettes for grid models
