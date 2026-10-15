@@ -1,3 +1,7 @@
+// The home dashboard's type: Sora for text, JetBrains Mono for numbers, Michroma for the wordmark and titles.
+import "@fontsource-variable/sora";
+import "@fontsource-variable/jetbrains-mono";
+import "@fontsource/michroma/latin.css";
 import { models, findModel } from "./models/registry";
 import { defaultParams, SILENT_MUSIC, type ModelDefinition, type MusicFrame, type ParamSpec, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./models/types";
 import { renderParamControls, type ParamControls, type ParamLocks } from "./ui/controls";
