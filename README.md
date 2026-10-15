@@ -116,19 +116,21 @@ Shift works in place of right-click everywhere.
 
 ![The sequencer: Song, the mixer and the drums, with the snare on Grids and the hat on Both](docs/screenshots/sequencer.png)
 
-A generative band: instead of programming steps, you steer each part and it writes and evolves the music itself. The tab has three columns.
+A generative band: instead of programming steps, you steer each part and it writes and evolves the music itself. Hover over anything and the line in the tab bar says what it does. The tab has three columns.
 
-- **Song**: style (broken beat, four on the floor, half-time, ambient), scale, root, tempo and swing, plus **New idea** (fresh patterns, melody and progression), **Fill** and **Hold all** (freeze everything).
+- **Song**: style (broken beat, four on the floor, half-time, ambient), scale, root, tempo and swing; **Energy**, which makes every track busier or sparser at once, and **Evolve**, how much every track changes as it plays; plus **New idea** (fresh patterns, melody and progression), **Fill** and **Hold all** (freeze everything).
 - **Mixer**: a strip each for Drums, Bass, Chords and Melody with a fader and meter, Pan, Echo and Reverb sends, Mute and Solo, and a Master strip. Muting a track also stops the visuals reacting to it; the **Mute** button at the top silences the audio only. Click a strip to edit that track.
-- **The selected track**, each with its own **Hold**:
+- **The selected track**, each with a **New** die (a fresh pattern, same settings) and its own **Hold**. Bass, chords and melody switch between their **Pattern** and their **Sound**:
   - **Drums**: kick, snare and hat, drawn as three rings. Each drum plays in one of three modes. **Euclidean** spreads its **Density** hits evenly round the bar, with **Steps**, **Offset** and **Reset** (back to the start every so many bars); drag a ring round to turn it. **Grids** reads its pattern off a drum map in the spirit of Mutable Instruments' Grids: straight to broken left to right, sparse to busy bottom to top, with **Fill** setting how much of it plays. **Both** plays the two together. Each drum also has Variation, Volume, Pan, Pitch, Decay and a tone knob (Punch, Snap, Bright).
   - **Bass**: a style (root pulse, off-beat, octave bounce, syncopated, walking, drone), Density, Range (root only up to chord tones and passing notes) and Variation. It follows the chords.
   - **Chords**: jazz, pop, dance or epic, each with its own progressions and harmonic rhythm (how long chords hold, and pickups into the next). **Rhythm density** adds changes, **Rhythm variation** varies the pattern each pass, **Variation** swaps in style-typical substitutes, and **Déjà vu** (from Mutable Instruments' Marbles) decides how often a variation comes back instead of a new one. Epic now and then lifts the whole song up a step for a pass.
-  - **Melody**: a style (wander, arpeggio, motif, lyrical), Range, Density and Groove. Strong beats lean on chord tones.
+  - **Melody**: a random sequencer after Mutable Instruments' **Marbles**. A clock plays **Coin**, **Bursts** or **Steady** rhythms at a rate you pick, with **Density** and **Jitter**. Each note is drawn from a range set by **Spread** and **Bias**, and **Steps** sets how hard it snaps, from gliding scale notes to only the chord's root. **Déjà vu** (Marbles' own loop, ported) brings the last few notes back more and more until they loop, over the rhythm, the notes or both, with **Loop length**. The view on the left draws both loops and the note range, and doubles as a Bias/Spread pad. Seven presets start you off: Drift, Wander, Riff, Sparkle, Chant, Shuffle and Chaos.
 
-Bass, chords and melody each play a voice ported from Mutable Instruments' **Plaits**, in its **Synth** column: eight engines (virtual analog, waveshaper, FM, grain formant, additive, string machine, plucked string, modal resonator), Harmonics, Timbre and Morph with envelope amounts, and the low-pass gate's Decay and Colour. Chords add **Inversion**, **Strum**, Attack and a tempo-synced Wobble; bass adds a Sub and Glide. The voices run in an AudioWorklet, off the main thread. Master holds the shared echo and reverb.
+![The Melody track: the Marbles view, presets, rhythm, notes and déjà vu](docs/screenshots/melody.png)
 
-![The Chords track: pattern controls and its Plaits synth](docs/screenshots/synth.png)
+Bass, chords and melody each play a voice ported from Mutable Instruments' **Plaits**, set in the track's **Sound** view. Six named sounds per track give a starting point (Round, Acid or Deep sub for the bass; String pad, Organ or Choir for the chords; Folded lead, Bell or Flute for the melody, and others), and under them are the voice's eight engines (virtual analog, waveshaper, FM, grain formant, additive, string machine, plucked string, modal resonator), Harmonics, Timbre and Morph with envelope amounts, and the low-pass gate's Decay and Colour. Chords add **Inversion**, **Strum**, Attack and a tempo-synced Wobble; bass adds a Sub and Glide. The voices run in an AudioWorklet, off the main thread. Master holds the shared echo and reverb.
+
+![The Chords track's Sound view: its named sounds and Plaits synth](docs/screenshots/synth.png)
 
 Every hit, bass note and chord reaches the current model, and every control can be mapped to a MIDI knob.
 
