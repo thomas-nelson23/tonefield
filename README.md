@@ -87,25 +87,25 @@ The layout follows Photoshop:
 
 **Macros** are four 0..1 knobs per model that each push several parameters at once.
 
-**Parameters** opens on the five to eight controls that change the picture most; the finer ones are under **More**, with the ones that rebuild the model (counts, resolution) marked ↻. Hover a control for what it does, or press **?** to show the descriptions under every control. Double-click a slider to put it back to its default, and **Reset** puts the whole model back; a dot after a label marks a value that is off its default. Values are saved per model. Some controls only appear when they apply (Plexus shows the sliders for the pattern you picked; Cymatics shows Turning for the round plate), and two models have pads: Living ink's **Chemistry** pad moves its feed and kill rates together, and Fabric's **Anchors** picture sets how each edge is held with a click. The ♪ beside any slider adds a modulation route to it.
+**Parameters** opens on the five to eight controls that change the picture most; the finer ones are under **More**, with the ones that rebuild the model (counts, resolution) marked ↻. Hover a control for what it does, or press **?** to show the descriptions under every control. Double-click a slider to put it back to its default, and **Reset** puts the whole model back; a dot after a label marks a value that is off its default. Values are saved per model. Some controls only appear when they apply (Plexus shows the sliders for the pattern you picked; Cymatics shows Turning for the round plate), and Living ink's **Chemistry** pad moves its feed and kill rates together. The ♪ beside any slider adds a modulation route to it.
 
 Keyboard: `Space` pause or play the visuals and the music, `Enter` play or stop the sequencer, `R` reset the model, `.` step one frame while paused, `S` show or hide the sidebar.
 
 ## Models
 
-| Murmuration | Fabric | Living ink |
+| Murmuration | Branches | Living ink |
 | --- | --- | --- |
-| ![Murmuration](docs/screenshots/murmuration.png) | ![Fabric](docs/screenshots/fabric.png) | ![Living ink](docs/screenshots/living-ink.png) |
+| ![Murmuration](docs/screenshots/murmuration.png) | ![Branches](docs/screenshots/branches.png) | ![Living ink](docs/screenshots/living-ink.png) |
 | **Cymatics** | **Plexus** | **Facets** |
 | ![Cymatics](docs/screenshots/cymatics.png) | ![Plexus](docs/screenshots/plexus.png) | ![Facets](docs/screenshots/facets.png) |
 
 | Model | What the music does | Interaction |
 | --- | --- | --- |
 | Murmuration | A flock of light streaks chases each note and takes its colour, which spreads bird to bird; chords colour part of the flock, kicks scatter it, snares spin vortices | Hold to attract, right-click to scatter |
-| Fabric | The spectrum lifts the fabric like an equaliser; kicks blow gusts, notes pluck and dye it. Each side can be pinned on its own (free, whole edge, rings or just the corners), and Resolution and Smoothing set how finely it's drawn | Drag to pull the fabric, right-drag to slice it (it heals) |
+| Branches | Glowing lines grow, wander and fork into more lines, and stop when they meet another line, so they pack the screen like coral or roots. Kicks sprout new trees, snares fork every growing tip at once, notes sprout where they land, the bass line curls the branches. Grow from the centre, the ground, the edges or anywhere | Click or hold to plant trees, right-drag to clear lines away |
 | Living ink | Reaction–diffusion that grows where the spectrum is loud; notes seed blooms, the palette follows the melody | Drag to seed (what you draw stays fed for Brush hold seconds), right-drag to wipe |
 | Cymatics | Glowing sand on a vibrating plate morphs to a new figure with every note; the round plate draws turning mandalas. The plate fills the screen, and with gravity on the sand streams through the figure endlessly | Drag to stir the sand |
-| Plexus | Glowing nodes joined by lines in a pattern you pick: web, constellations, star rings, string art, branches or wave mesh. Nodes spring between patterns, notes fire signals along the lines, kicks burst the shape, the bass bends it | Drag to pull nodes in, right-drag to push them away |
+| Plexus | Glowing nodes joined by lines in a pattern you pick: web, constellations, star rings, string art, fractal tree or wave mesh. Nodes spring between patterns, notes fire signals along the lines, kicks burst the shape, the bass bends it | Drag to pull nodes in, right-drag to push them away |
 | Facets | 3D polyhedra (ten shapes, from tetrahedron to torus) turning in glass, solid or wireframe, with nested shells. Every few bars the shape subdivides into a sphere, grows spikes, shatters, folds open or twists and morphs into the next shape. Kicks burst the faces apart, snares knock it spinning, notes light faces by pitch, chords tint the shells, the spectrum grows spikes | Drag to spin it, right-click to burst it apart |
 
 Shift works in place of right-click everywhere.
@@ -140,7 +140,7 @@ Every hit, bass note and chord reaches the current model, and every control can 
 
 Two columns:
 
-- **Built into this model**: what the model does with the music by itself, such as Kick → Burst outward, grouped into Drums, Melody and chords, and Loudness. Each group folds to one strength slider that sets every reaction in it; open it for each reaction's own strength, on/off switch and delete button. A reaction's strength is also the control for what it does: Fabric's Spectrum lift row, say, sets how high the spectrum lifts the fabric. **Restore built-ins** brings back any you deleted and **Reset built-ins** puts them all back at 100%.
+- **Built into this model**: what the model does with the music by itself, such as Kick → Burst outward, grouped into Drums, Melody and chords, and Loudness. Each group folds to one strength slider that sets every reaction in it; open it for each reaction's own strength, on/off switch and delete button. A reaction's strength is also the control for what it does: Branches' Sprout a tree row, say, sets how many arms each kick's new tree has. **Restore built-ins** brings back any you deleted and **Reset built-ins** puts them all back at 100%.
 - **Your routes**: a source pushes a slider, macro or global control by a share of its range, each with a live meter, a dice that rolls a random target and amount, and → to find the slider in the sidebar. Sources are the drums, melody, bass notes and chords, tempo-synced LFOs, audio levels (overall, bass, mids, treble), a few advanced ones, and MIDI (mod wheel, pitch bend and any CC) once a controller is connected. A ♪ under a sidebar slider names what is pushing it and opens the route; the ♪ beside a slider adds one.
 
 **Intensity** scales every reaction and route on every model, **Note decay** sets how long a hit keeps pushing, **Smoothing** stops the audio levels flickering a slider, and the **Visuals** switch in the music panel's header turns it all off. Routes and built-in settings are saved per model.
@@ -250,7 +250,7 @@ src/
     types.ts         the model interface
     registry.ts      list of available models
     boids.ts         Murmuration: flocking light streaks
-    cloth.ts         Fabric: Verlet cloth lifted by the spectrum
+    branches.ts      Branches: growing lines that fork and avoid each other
     reaction.ts      Living ink: Gray-Scott reaction-diffusion
     chladni.ts       Cymatics: sand figures on a vibrating plate
     plexus.ts        Plexus: nodes joined by lines in six patterns

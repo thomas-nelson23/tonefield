@@ -2,7 +2,7 @@
 import "@fontsource-variable/sora";
 import "@fontsource-variable/jetbrains-mono";
 import "@fontsource/michroma/latin.css";
-import { models, findModel } from "./models/registry";
+import { models, findModel, retiredIds } from "./models/registry";
 import { defaultParams, SILENT_MUSIC, type ModelDefinition, type MusicFrame, type ParamSpec, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./models/types";
 import { renderParamControls, type ParamControls, type ParamLocks } from "./ui/controls";
 import { setupPanels, setupRangeFill, setupSidebarToggle } from "./ui/panels";
@@ -655,6 +655,8 @@ studio.setHelp(helpShown);
 let initial = models[0].id;
 try {
   initial = localStorage.getItem("lastModel") ?? initial;
+  // Settings of models that were replaced (Fabric, now Branches) are no use to anything.
+  for (const id of retiredIds) for (const key of [`params:${id}`, `ui:locks:${id}`, `music:model:${id}`]) localStorage.removeItem(key);
 } catch {
   // Fall back to the first model.
 }

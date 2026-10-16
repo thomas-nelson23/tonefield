@@ -421,7 +421,7 @@ button.lock.on:hover:not(:disabled) { color: var(--accent-hover); }
   content: ""; display: inline-block; width: 4px; height: 4px; margin-left: 5px; border-radius: 50%;
   background: var(--cyan); vertical-align: 2px; opacity: 0.8;
 }
-/* The pad and the anchor picture: a label row, then the control across the panel. */
+/* The pad: a label row, then the control across the panel. */
 #sidebar .param-widget { display: grid; grid-template-columns: var(--icons, 14px) minmax(0, 1fr); column-gap: 6px; }
 #sidebar .param-widget:not(.lockable) { grid-template-columns: minmax(0, 1fr); }
 #sidebar .param-widget > .param-icons { grid-column: 1; grid-row: 1; }
@@ -430,7 +430,6 @@ button.lock.on:hover:not(:disabled) { color: var(--accent-hover); }
 #sidebar .param-widget > .widget-caption, #sidebar .param-widget > .param-help, #sidebar .param-widget > .mod-badge { grid-column: 1 / -1; }
 .widget-caption { margin-top: 3px; color: var(--muted); font-family: var(--mono); font-size: 10.5px; font-variant-ligatures: none; text-align: center; }
 canvas.pad { width: 100%; height: 96px; border-radius: var(--radius-sm); background: var(--field); border: 1px solid var(--line); cursor: crosshair; touch-action: none; }
-canvas.anchors { width: 120px; height: 84px; justify-self: center; cursor: pointer; }
 /* A dropdown drawn as a row of buttons. */
 #sidebar .param-segmented { display: grid; grid-template-columns: var(--icons, 14px) minmax(0, 1fr); column-gap: 6px; }
 #sidebar .param-segmented:not(.lockable) { grid-template-columns: minmax(0, 1fr); }
