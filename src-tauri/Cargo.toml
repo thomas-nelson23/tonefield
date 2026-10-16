@@ -1,6 +1,6 @@
 [package]
 name = "tonefield"
-version = "0.3.8"
+version = "0.3.9"
 description = "Interactive physics and algorithm visualizer"
 edition = "2021"
 

@@ -92,12 +92,11 @@ export type ParamSpec = ParamCommon &
   | {
       /**
        * A control drawn for other parameters: an XY pad that moves two number
-       * parameters at once, or Fabric's anchor picture that sets its four
-       * sides. The parameters it names get no control of their own unless
-       * they are `advanced`.
+       * parameters at once. The parameters it names get no control of their
+       * own unless they are `advanced`.
        */
       kind: "widget";
-      widget: "pad" | "anchors";
+      widget: "pad";
       keys: string[];
     }
   );

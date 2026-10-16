@@ -54,7 +54,6 @@ export interface ControlOptions {
 }
 
 type NumberSpec = Extract<ParamSpec, { kind: "number" }>;
-type ChoiceSpec = Extract<ParamSpec, { kind: "choice" }>;
 
 const LOCK_ICON =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.5" width="8" height="5.5" rx="1"/><path class="shackle" d="M4 5.5V4a2 2 0 0 1 4 0v1.5"/></svg>';
@@ -395,7 +394,7 @@ export function renderParamControls(
       refreshers.push(show);
       row.append(input, label);
       finishRow(row, spec, [spec.key]);
-    } else if (spec.widget === "pad") {
+    } else {
       const xs = byKey.get(spec.keys[0]), ys = byKey.get(spec.keys[1]);
       if (!xs || !ys || xs.kind !== "number" || ys.kind !== "number") continue;
       row.classList.add("param-widget");
@@ -411,20 +410,6 @@ export function renderParamControls(
       (dependents[xs.key] ??= []).push(() => pad.draw());
       (dependents[ys.key] ??= []).push(() => pad.draw());
       row.append(label, pad.canvas, readout);
-      finishRow(row, spec, spec.keys);
-    } else {
-      const sides = spec.keys.map((k) => byKey.get(k)).filter((s): s is ChoiceSpec => !!s && s.kind === "choice");
-      if (sides.length !== 4) continue;
-      row.classList.add("param-widget");
-      const label = document.createElement("label");
-      const name = document.createElement("span");
-      name.textContent = spec.label;
-      label.append(name);
-      const readout = document.createElement("div");
-      readout.className = "widget-caption";
-      const anchors = anchorsControl(sides, values, (s) => changed(s), readout);
-      refreshers.push(anchors.draw);
-      row.append(label, anchors.canvas, readout);
       finishRow(row, spec, spec.keys);
     }
   }
@@ -579,110 +564,6 @@ function padControl(
   });
   // The panel may not be laid out yet; draw once it is.
   requestAnimationFrame(() => draw());
-  return { canvas, draw };
-}
-
-/**
- * Fabric's anchors as a picture: a sheet whose four edges show how they are
- * held. Clicking an edge steps it through its options.
- */
-function anchorsControl(
-  sides: ChoiceSpec[], values: ParamValues, changed: (spec: ChoiceSpec) => void, readout: HTMLElement,
-): { canvas: HTMLCanvasElement; draw(): void } {
-  const W = 120, H = 84, M = 14;
-  const canvas = document.createElement("canvas");
-  canvas.className = "anchors";
-  canvas.title = "Click an edge of the sheet to change how it is held";
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.round(W * dpr);
-  canvas.height = Math.round(H * dpr);
-  const g = canvas.getContext("2d");
-  g?.setTransform(dpr, 0, 0, dpr, 0, 0);
-  // Top, bottom, left, right: where each edge runs and which way its points are laid.
-  const edges = [
-    { x0: M, y0: M, x1: W - M, y1: M },
-    { x0: M, y0: H - M, x1: W - M, y1: H - M },
-    { x0: M, y0: M, x1: M, y1: H - M },
-    { x0: W - M, y0: M, x1: W - M, y1: H - M },
-  ];
-  const optionLabel = (s: ChoiceSpec) => s.options.find((o) => o.value === values[s.key])?.label ?? String(values[s.key]);
-  const draw = () => {
-    if (!g) return;
-    const style = getComputedStyle(canvas);
-    const cyan = style.getPropertyValue("--cyan").trim() || "#2ad4ff";
-    const muted = style.getPropertyValue("--muted").trim() || "#9cc7cf";
-    const line = style.getPropertyValue("--line").trim() || "rgba(255,255,255,0.1)";
-    g.clearRect(0, 0, W, H);
-    // The sheet.
-    g.fillStyle = "rgba(42, 212, 255, 0.06)";
-    g.fillRect(M, M, W - 2 * M, H - 2 * M);
-    g.strokeStyle = line;
-    g.lineWidth = 1;
-    g.setLineDash([3, 3]);
-    g.strokeRect(M + 0.5, M + 0.5, W - 2 * M - 1, H - 2 * M - 1);
-    g.setLineDash([]);
-    sides.forEach((s, i) => {
-      const e = edges[i];
-      const mode = values[s.key] as string;
-      const n = 7;
-      if (mode === "edge") {
-        g.strokeStyle = cyan;
-        g.lineWidth = 3;
-        g.beginPath();
-        g.moveTo(e.x0, e.y0); g.lineTo(e.x1, e.y1);
-        g.stroke();
-        return;
-      }
-      const dots = mode === "rings" ? [0, 1, 2, 3, 4, 5, 6] : mode === "ends" ? [0, 6] : [];
-      g.fillStyle = cyan;
-      for (const k of dots) {
-        const t = k / (n - 1);
-        g.beginPath();
-        g.arc(e.x0 + (e.x1 - e.x0) * t, e.y0 + (e.y1 - e.y0) * t, 2.6, 0, Math.PI * 2);
-        g.fill();
-      }
-      if (mode === "free") {
-        // A loose edge: a faint wave just outside it.
-        g.strokeStyle = muted;
-        g.globalAlpha = 0.5;
-        g.lineWidth = 1;
-        g.beginPath();
-        const vertical = e.x0 === e.x1;
-        const out = i === 0 || i === 2 ? -5 : 5;
-        for (let k = 0; k <= 12; k++) {
-          const t = k / 12;
-          const wobble = Math.sin(t * Math.PI * 3) * 2;
-          const x = vertical ? e.x0 + out + wobble : e.x0 + (e.x1 - e.x0) * t;
-          const y = vertical ? e.y0 + (e.y1 - e.y0) * t : e.y0 + out + wobble;
-          if (k === 0) g.moveTo(x, y);
-          else g.lineTo(x, y);
-        }
-        g.stroke();
-        g.globalAlpha = 1;
-      }
-    });
-    readout.textContent = sides.map((s) => `${s.label.split(" ")[0]} ${optionLabel(s).split(" ")[0].toLowerCase()}`).join(" · ");
-  };
-  canvas.addEventListener("click", (e) => {
-    const r = canvas.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width) * W, y = ((e.clientY - r.top) / r.height) * H;
-    // The edge the click is nearest to.
-    const d = [Math.abs(y - M), Math.abs(y - (H - M)), Math.abs(x - M), Math.abs(x - (W - M))];
-    const i = d.indexOf(Math.min(...d));
-    const s = sides[i];
-    const k = s.options.findIndex((o) => o.value === values[s.key]);
-    values[s.key] = s.options[(k + 1) % s.options.length].value;
-    draw();
-    changed(s);
-  });
-  canvas.addEventListener("pointermove", (e) => {
-    const r = canvas.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width) * W, y = ((e.clientY - r.top) / r.height) * H;
-    const d = [Math.abs(y - M), Math.abs(y - (H - M)), Math.abs(x - M), Math.abs(x - (W - M))];
-    const s = sides[d.indexOf(Math.min(...d))];
-    canvas.title = `${s.label}: ${optionLabel(s)}. Click to change.`;
-  });
-  draw();
   return { canvas, draw };
 }
 

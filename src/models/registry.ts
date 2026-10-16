@@ -1,5 +1,5 @@
 import type { ModelDefinition } from "./types";
-import { cloth } from "./cloth";
+import { branches } from "./branches";
 import { boids } from "./boids";
 import { plexus } from "./plexus";
 import { reaction } from "./reaction";
@@ -13,9 +13,15 @@ import { facets } from "./facets";
  */
 export const models: ModelDefinition[] = [
   boids,
-  cloth, reaction, chladni, plexus, facets,
+  branches, reaction, chladni, plexus, facets,
 ];
 
+/** Models that were replaced, and the one that took their place in the list. */
+const RETIRED: Record<string, string> = { cloth: "branches" };
+
 export function findModel(id: string): ModelDefinition | undefined {
-  return models.find((m) => m.id === id);
+  return models.find((m) => m.id === (RETIRED[id] ?? id));
 }
+
+/** Ids of models that no longer exist, so their saved settings can be cleared away. */
+export const retiredIds = Object.keys(RETIRED);
