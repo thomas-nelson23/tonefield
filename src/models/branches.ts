@@ -1,515 +1,461 @@
 import { hsla, type Gfx } from "../gl/gfx";
-import { curveFor, jitterScale, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
-import { gravityModeParam, gravityTo } from "./lib/gravity";
+import { curveFor, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamValues, type PointerInput, type SimulationModel, type Viewport } from "./types";
 import { noteHue } from "./lib/music";
 import { Feedback, applyFeedback, colourParam, feedbackParams, glowSprite, hueToward, schemeHue } from "./lib/visual";
 
-/** Most line pieces kept; the oldest fade out as the buffer fills, so it never pops. */
-const MAX_SEGS = 24000;
-/** The oldest share of the buffer that fades out ahead of being overwritten. */
-const RING_FADE = 0.25;
-/** A tip lays down a piece of line every this many pixels. */
-const SEG_LEN = 7;
-/** Side of a cell in the grid that remembers where lines are, in pixels. */
-const CELL = 6;
-/** A new tip ignores lines for this many pixels, so siblings can leave the fork they share. */
-const GRACE = 14;
-/** Lines are drawn in this many hues times this many brightness steps (and, on the CPU, widths). */
+/** Lines are drawn in this many hues per depth, one path each on the CPU. */
 const HUES = 18;
-const SHADES = 6;
-const WIDTHS = 4;
 /** Most tip glows drawn in a frame. */
-const MAX_GLOWS = 160;
+const MAX_GLOWS = 200;
 
-/** Where new trees start. */
-const SEED_OPTIONS = [
-  { value: "centre", label: "Centre" },
-  { value: "ground", label: "Ground" },
-  { value: "edges", label: "Edges" },
-  { value: "scatter", label: "Scatter" },
+/** How the tree grows and shrinks. */
+const STYLE_OPTIONS = [
+  { value: "breathe", label: "Breathe" },
+  { value: "wander", label: "Wander" },
+  { value: "pulse", label: "Pulse" },
+  { value: "seasons", label: "Seasons" },
 ];
 
 /**
- * Lines that grow, wander and fork into more lines, like coral, lightning or
- * roots. Each growing tip steers with a little random wander, splits in two
- * now and then, and stops when it runs into a line that is already there, so
- * the branches pack the space the way Living ink's patterns do. Old lines
- * fade away and new trees sprout on the beat, where notes land and wherever
- * you click.
+ * A fractal tree, like Plexus's Fractal tree pattern, that is alive: each
+ * arm splits in two again and again, and every branch grows out from its
+ * parent and dies back tip first. Branches that die back regrow at a slightly
+ * different angle and length, so like Living ink the shape keeps changing
+ * while the symmetry holds. The Growth style sets the rhythm: the whole tree
+ * breathing in and out, branches dying and regrowing at random, a surge of
+ * growth on every beat, or full seasons of growth and fall.
+ *
+ * The tree is stored per arm as a binary heap: node 1 is the trunk and node
+ * k's branches are 2k and 2k + 1, so a node's depth is floor(log2 k).
  */
 class BranchesSim implements SimulationModel {
-  // Growing tips, packed in parallel arrays.
-  private tips = 0;
-  private tx = new Float64Array(0);
-  private ty = new Float64Array(0);
-  private ta = new Float64Array(0);
-  /** How fast the tip is turning, radians a second; Wander nudges it at random. */
-  private tv = new Float64Array(0);
-  /** Where the tip last laid a piece of line. */
-  private tlx = new Float64Array(0);
-  private tly = new Float64Array(0);
-  private tw = new Float32Array(0);
-  private th = new Float32Array(0);
-  private tid = new Int32Array(0);
-  /** Pixels the tip has grown; it stops after `tlife`. */
-  private tdist = new Float32Array(0);
-  private tlife = new Float32Array(0);
-  private tspark = new Float32Array(0);
-  private nextId = 1;
-
-  // Laid line pieces, a ring buffer: x0 y0 x1 y1, width, hue, birth time.
-  private sx0 = new Float32Array(MAX_SEGS);
-  private sy0 = new Float32Array(MAX_SEGS);
-  private sx1 = new Float32Array(MAX_SEGS);
-  private sy1 = new Float32Array(MAX_SEGS);
-  private sw = new Float32Array(MAX_SEGS);
-  private sh = new Float32Array(MAX_SEGS);
-  private sb = new Float32Array(MAX_SEGS);
-  private head = 0;
-  private count = 0;
-
-  /** For each grid cell, when a line last passed and which tip laid it. */
-  private gw = 0;
-  private gh = 0;
-  private cellTime = new Float32Array(0);
-  private cellId = new Int32Array(0);
-
+  private arms = 6;
+  private depth = 8;
+  /** Nodes per arm, heap-indexed from 1. */
+  private N = 256;
+  private mirror = true;
+  /** Per state slot (one arm's worth when mirrored, every arm's otherwise): */
+  private grown = new Float32Array(0);
+  private alive = new Uint8Array(0);
+  /** When a dead branch comes back, in seconds of model time. */
+  private reviveAt = new Float32Array(0);
+  /** This growth's random bend and length, -1..1, picked again each time it regrows. */
+  private jitA = new Float32Array(0);
+  private jitL = new Float32Array(0);
+  /** A note colour soaked into the branch, and how strongly, fading. */
+  private dyeHue = new Float32Array(0);
+  private dye = new Float32Array(0);
+  private spark = new Float32Array(0);
+  /** Where each branch of every arm ends this frame, and its direction, for drawing and the pointer. */
+  private sx = new Float64Array(0);
+  private sy = new Float64Array(0);
+  private ex = new Float64Array(0);
+  private ey = new Float64Array(0);
+  private ang = new Float64Array(0);
   private view: Viewport = { width: 1, height: 1 };
   private time = 0;
-  private sproutClock = 0;
-  private plantClock = 0;
-  private pointer: { x: number; y: number; cut: boolean } | null = null;
-  /** Bass-line curl, set on each bass note and easing off. */
-  private curl = 0;
-  private curlSide = 1;
+  private rotation = 0;
+  /** How far out the tree is allowed to grow, in levels. */
+  private frontier = 0;
+  private boost = 0;
   private flash = 0;
+  private bend = 0;
+  private bendTarget = 0;
+  private changeClock = 0;
+  private seasonGen = -1;
+  private beats = 0;
+  /** The beat clock at the last kick. */
+  private lastKick = -100;
+  private pointer: { x: number; y: number; cut: boolean; clock: number } | null = null;
+  private params: ParamValues = {};
   private fb = new Feedback();
   private stepped = false;
-  private grav = new Float64Array(2);
-  private params: ParamValues = {};
-  private music = { hue: 210, beats: 0 };
 
   reset(view: Viewport, p: ParamValues): void {
     this.view = view;
     this.params = p;
-    const max = Math.round(p.maxTips as number);
-    this.tx = new Float64Array(max);
-    this.ty = new Float64Array(max);
-    this.ta = new Float64Array(max);
-    this.tv = new Float64Array(max);
-    this.tlx = new Float64Array(max);
-    this.tly = new Float64Array(max);
-    this.tw = new Float32Array(max);
-    this.th = new Float32Array(max);
-    this.tid = new Int32Array(max);
-    this.tdist = new Float32Array(max);
-    this.tlife = new Float32Array(max);
-    this.tspark = new Float32Array(max);
-    this.tips = 0;
-    this.head = 0;
-    this.count = 0;
+    this.arms = Math.round(p.symmetry as number);
+    this.depth = Math.round(p.levels as number);
+    this.N = 1 << this.depth;
+    this.mirror = p.mirror as boolean;
+    const slots = (this.mirror ? 1 : this.arms) * this.N;
+    this.grown = new Float32Array(slots);
+    this.alive = new Uint8Array(slots).fill(1);
+    this.reviveAt = new Float32Array(slots);
+    this.jitA = new Float32Array(slots);
+    this.jitL = new Float32Array(slots);
+    for (let i = 0; i < slots; i++) this.rejitter(i);
+    this.dyeHue = new Float32Array(slots);
+    this.dye = new Float32Array(slots);
+    this.spark = new Float32Array(slots);
+    this.sx = new Float64Array(this.arms * this.N);
+    this.sy = new Float64Array(this.arms * this.N);
+    this.ex = new Float64Array(this.arms * this.N);
+    this.ey = new Float64Array(this.arms * this.N);
+    this.ang = new Float64Array(this.arms * this.N);
     this.time = 0;
-    this.makeGrid();
-    for (let i = 0; i < 3; i++) this.seed(p, null, null, 210);
+    this.frontier = 1;
+    this.seasonGen = -1;
   }
 
   resize(view: Viewport): void {
     this.view = view;
-    this.makeGrid();
   }
 
-  private makeGrid(): void {
-    this.gw = Math.max(1, Math.ceil(this.view.width / CELL));
-    this.gh = Math.max(1, Math.ceil(this.view.height / CELL));
-    this.cellTime = new Float32Array(this.gw * this.gh).fill(-1e9);
-    this.cellId = new Int32Array(this.gw * this.gh);
+  private rejitter(i: number): void {
+    this.jitA[i] = Math.random() * 2 - 1;
+    this.jitL[i] = Math.random() * 2 - 1;
   }
 
-  /** How long a line counts as there for collisions: until it has mostly faded. */
-  private solidFor(p: ParamValues): number {
-    return (p.fade as number) * 0.8;
+  /** The state slot of node `k` on arm `arm`. */
+  private slot(arm: number, k: number): number {
+    return this.mirror ? k : arm * this.N + k;
   }
 
-  /** Add a growing tip; false when there is no room for another. */
-  private addTip(x: number, y: number, angle: number, width: number, hue: number, life: number, spark = 0): boolean {
-    if (this.tips >= this.tx.length) return false;
-    const i = this.tips++;
-    this.tx[i] = this.tlx[i] = x;
-    this.ty[i] = this.tly[i] = y;
-    this.ta[i] = angle;
-    this.tv[i] = 0;
-    this.tw[i] = width;
-    this.th[i] = hue;
-    this.tid[i] = this.nextId++;
-    this.tdist[i] = 0;
-    this.tlife[i] = life;
-    this.tspark[i] = spark;
-    return true;
-  }
-
-  private removeTip(i: number): void {
-    const j = --this.tips;
-    if (i === j) return;
-    this.tx[i] = this.tx[j]; this.ty[i] = this.ty[j]; this.ta[i] = this.ta[j]; this.tv[i] = this.tv[j];
-    this.tlx[i] = this.tlx[j]; this.tly[i] = this.tly[j];
-    this.tw[i] = this.tw[j]; this.th[i] = this.th[j]; this.tid[i] = this.tid[j];
-    this.tdist[i] = this.tdist[j]; this.tlife[i] = this.tlife[j]; this.tspark[i] = this.tspark[j];
-  }
-
-  /** How far a tip grows before it stops, in pixels. */
-  private tipLife(): number {
-    const { width: w, height: h } = this.view;
-    return Math.min(w, h) * (0.12 + Math.random() * 0.3);
-  }
-
-  /**
-   * Start a tree: a few tips leaving one point. Without a place, the Grow
-   * from setting picks one. `hue` is the colour it starts with.
-   */
-  private seed(p: ParamValues, x: number | null, y: number | null, hue: number, arms = 0, strength = 1): void {
-    const { width: w, height: h } = this.view;
-    const mode = p.seed as string;
-    let angle = Math.random() * Math.PI * 2, fan = Math.PI * 2;
-    if (x === null || y === null) {
-      if (mode === "centre") {
-        // Near the middle, in the clearest of a few tries so new trees don't pile onto old ones.
-        let best = Infinity;
-        for (let k = 0; k < 10; k++) {
-          const r = Math.sqrt(Math.random()) * Math.min(w, h) * 0.4, t = Math.random() * Math.PI * 2;
-          const cx = w / 2 + Math.cos(t) * r, cy = h / 2 + Math.sin(t) * r;
-          const busy = this.busy(cx, cy) + r / (Math.min(w, h) * 0.4) * 0.25;
-          if (busy < best) { best = busy; x = cx; y = cy; }
-        }
-      } else if (mode === "ground") {
-        x = w * (0.05 + Math.random() * 0.9);
-        y = h - 2;
-        angle = -Math.PI / 2;
-        fan = Math.PI * 0.5;
-      } else if (mode === "edges") {
-        // From a random point on an edge, growing inward.
-        const side = Math.floor(Math.random() * 4), t = Math.random();
-        x = side === 0 ? t * w : side === 1 ? t * w : side === 2 ? 2 : w - 2;
-        y = side === 0 ? 2 : side === 1 ? h - 2 : t * h;
-        angle = side === 0 ? Math.PI / 2 : side === 1 ? -Math.PI / 2 : side === 2 ? 0 : Math.PI;
-        fan = Math.PI * 0.6;
-      } else {
-        let best = Infinity;
-        for (let k = 0; k < 6; k++) {
-          const cx = w * (0.08 + Math.random() * 0.84), cy = h * (0.08 + Math.random() * 0.84);
-          const busy = this.busy(cx, cy);
-          if (busy < best) { best = busy; x = cx; y = cy; }
+  /** Mark node `k`'s whole branch (it and everything growing from it) dead or alive. */
+  private setBranch(base: number, k: number, live: boolean, revive: number): void {
+    const N = this.N;
+    // Walk the subtree level by level: at each depth its nodes are a contiguous run.
+    for (let lo = k, hi = k; lo < N; lo = lo * 2, hi = hi * 2 + 1) {
+      for (let j = lo; j <= Math.min(hi, N - 1); j++) {
+        const i = base + j;
+        if (live) {
+          if (!this.alive[i] && this.grown[i] === 0) this.rejitter(i);
+          this.alive[i] = 1;
+        } else {
+          this.alive[i] = 0;
+          this.reviveAt[i] = this.time + revive * (0.7 + Math.random() * 0.6);
         }
       }
     }
-    if (x === null || y === null) return;
-    const n = arms || (fan >= Math.PI * 2 ? 3 + Math.floor(Math.random() * 3) : 1 + Math.floor(Math.random() * 2));
-    const width = (p.lineWidth as number) * (0.8 + strength * 0.4);
-    for (let k = 0; k < n; k++) {
-      const a = fan >= Math.PI * 2 ? angle + (k / n) * Math.PI * 2 : angle + (Math.random() - 0.5) * fan;
-      if (!this.addTip(x, y, a, width, (hue + (Math.random() - 0.5) * 16 + 360) % 360, this.tipLife() * (0.7 + strength * 0.5), strength)) break;
-    }
   }
 
-  /** The hue a new tree takes under the colour scheme. */
-  private seedHue(p: ParamValues): number {
-    return schemeHue(p.colours as string, Math.random(), this.music.hue, this.music.beats);
-  }
-
-  /** How much of the area round (x, y) is covered by lines still showing, 0..1. */
-  private busy(x: number, y: number): number {
-    const solid = this.solidFor(this.params);
-    const cx = Math.floor(x / CELL), cy = Math.floor(y / CELL);
-    let hit = 0, all = 0;
-    for (let j = cy - 6; j <= cy + 6; j += 2) {
-      for (let i = cx - 6; i <= cx + 6; i += 2) {
-        if (i < 0 || j < 0 || i >= this.gw || j >= this.gh) continue;
-        all++;
-        if (this.time - this.cellTime[j * this.gw + i] < solid) hit++;
+  /** Clear node `k`'s branch back to nothing so it grows again in a new shape. */
+  private regrow(base: number, k: number, hue = -1, dye = 0): void {
+    const N = this.N;
+    for (let lo = k, hi = k; lo < N; lo = lo * 2, hi = hi * 2 + 1) {
+      for (let j = lo; j <= Math.min(hi, N - 1); j++) {
+        const i = base + j;
+        if (j !== k) this.grown[i] = 0;
+        this.alive[i] = 1;
+        this.rejitter(i);
+        if (hue >= 0) { this.dyeHue[i] = hue; this.dye[i] = Math.max(this.dye[i], dye); }
       }
     }
-    return all ? hit / all : 0;
   }
 
-  /** Lay a piece of line into the ring buffer and mark its cells. */
-  private lay(x0: number, y0: number, x1: number, y1: number, width: number, hue: number, id: number): void {
-    const s = this.head;
-    this.sx0[s] = x0; this.sy0[s] = y0; this.sx1[s] = x1; this.sy1[s] = y1;
-    this.sw[s] = width; this.sh[s] = hue; this.sb[s] = this.time;
-    this.head = (s + 1) % MAX_SEGS;
-    if (this.count < MAX_SEGS) this.count++;
-    this.mark(x1, y1, id);
-    this.mark((x0 + x1) / 2, (y0 + y1) / 2, id);
+  /** A random node at least `minDepth` levels out, as a heap index. */
+  private randomNode(minDepth: number): number {
+    const d = minDepth + Math.floor(Math.random() * Math.max(1, this.depth - minDepth));
+    return (1 << d) + Math.floor(Math.random() * (1 << d));
   }
 
-  private mark(x: number, y: number, id: number): void {
-    const cx = Math.floor(x / CELL), cy = Math.floor(y / CELL);
-    if (cx < 0 || cy < 0 || cx >= this.gw || cy >= this.gh) return;
-    const c = cy * this.gw + cx;
-    this.cellTime[c] = this.time;
-    this.cellId[c] = id;
-  }
-
-  /** Whether another tip's line, still solid, is at (x, y). */
-  private blocked(x: number, y: number, id: number, solid: number): boolean {
-    const cx = Math.floor(x / CELL), cy = Math.floor(y / CELL);
-    if (cx < 0 || cy < 0 || cx >= this.gw || cy >= this.gh) return false;
-    const c = cy * this.gw + cx;
-    return this.cellId[c] !== id && this.time - this.cellTime[c] < solid;
+  private bases(): number[] {
+    const out: number[] = [];
+    for (let a = 0; a < (this.mirror ? 1 : this.arms); a++) out.push(a * this.N);
+    return out;
   }
 
   step(dt: number, p: ParamValues, m: MusicFrame): void {
     this.params = p;
     this.stepped = true;
     this.time += dt;
-    this.music.hue = m.hue;
-    this.music.beats = m.beats;
-    const { width: w, height: h } = this.view;
-    const speed = (p.speed as number) * (1 + Math.min(1.5, m.level) * 0.5);
-    const branching = p.branching as number;
-    const spread = ((p.spread as number) * Math.PI) / 180;
-    // The turn rate takes a random walk that settles back toward straight, so tips curve smoothly.
-    const wander = (p.wander as number) * 3 * jitterScale(dt) * Math.sqrt(1 / 60);
-    const settle = Math.exp(-dt * 3);
-    const avoid = p.avoid as boolean;
-    const solid = this.solidFor(p);
-    const taper = p.taper as number;
-    const minWidth = 0.35;
-    const g = p.fieldGravity as number, mode = p.gravityMode as string;
-    this.curl *= Math.exp(-dt * 1.5);
-    this.flash *= Math.exp(-dt * 6);
-    const curl = this.curl * this.curlSide;
-    const fade = Math.exp(-dt * 5);
+    this.rotation += ((p.rotation as number) * Math.PI / 180) * dt;
+    const D = this.depth, N = this.N;
+    const style = p.style as string;
+    const cycle = Math.max(1, p.cycle as number);
+    const change = p.change as number;
 
-    // Grow every tip. Tips added by a split this step wait for the next one.
-    const before = this.tips;
-    for (let i = 0; i < before && i < this.tips; i++) {
-      this.tv[i] = (this.tv[i] + (Math.random() - 0.5) * 2 * wander) * settle;
-      let a = this.ta[i] + (this.tv[i] + curl) * dt;
-      if (mode !== "off" && g > 0) {
-        // Gravity bends the tip toward its pull.
-        gravityTo(this.grav, mode, g, this.tx[i], this.ty[i], w, h, this.time);
-        const gx = this.grav[0], gy = this.grav[1];
-        const pull = Math.hypot(gx, gy);
-        if (pull > 0) {
-          const d = ((Math.atan2(gy, gx) - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-          a += d * Math.min(1, (pull / 1000) * dt * 2);
+    // How far out the tree may grow, by style.
+    if (style === "breathe") {
+      const t = 0.5 - 0.5 * Math.cos((m.beats / cycle) * Math.PI * 2);
+      this.frontier = 1.5 + (D - 1.5) * (0.25 + 0.75 * t) + Math.min(1, m.level) * 0.8;
+    } else if (style === "pulse") {
+      // Each kick throws the tree out to full size (without drums, each bar does); it sinks back over a cycle.
+      const beatsPerSecond = Math.max(0.5, (m.beats - this.beats) / dt);
+      this.frontier = Math.max(1.5, this.frontier - dt * beatsPerSecond * (D / cycle));
+      if (Math.floor(m.beats / 4) !== Math.floor(this.beats / 4) && m.beats - this.lastKick > 4) this.frontier = D + 0.5;
+    } else if (style === "seasons") {
+      // Grow out and hold for a cycle, then fall back to the trunk; each new year grows a new shape.
+      const year = Math.floor(m.beats / (cycle * 2));
+      const phase = (m.beats / (cycle * 2)) - year;
+      this.frontier = phase < 0.62 ? D + 0.5 : 0.6;
+      if (year !== this.seasonGen) {
+        if (this.seasonGen >= 0) for (let i = 0; i < this.grown.length; i++) if (this.grown[i] === 0) this.rejitter(i);
+        this.seasonGen = year;
+      }
+    } else {
+      this.frontier = D + 0.5;
+    }
+
+    this.beats = m.beats;
+
+    // Branches die back now and then and come back later in a new shape; Wander does it far more.
+    const rate = change * (style === "wander" ? 4 : 1);
+    this.changeClock += dt * rate;
+    while (this.changeClock >= 1) {
+      this.changeClock -= 1;
+      for (const base of this.bases()) {
+        const k = this.randomNode(Math.min(2, D - 1));
+        if (this.alive[base + k]) this.setBranch(base, k, false, 1.2 + 2.5 / Math.max(0.2, rate));
+      }
+    }
+
+    const speed = (p.speed as number) * (1 + this.boost * (p.kickGrow as number)) * (1 + Math.min(1, m.level) * 0.3);
+    const grow = speed * dt;
+    this.boost *= Math.exp(-dt * 3);
+    this.flash *= Math.exp(-dt * 5);
+    this.bend += (this.bendTarget - this.bend) * Math.min(1, dt * 4);
+    this.bendTarget *= Math.exp(-dt * 0.7);
+    const fade = Math.exp(-dt * 0.35), sparkFade = Math.exp(-dt * 6);
+    const { grown, alive, reviveAt } = this;
+    for (const base of this.bases()) {
+      // Grow from the trunk out: a branch only grows once the one it leaves is complete.
+      for (let k = 1; k < N; k++) {
+        const i = base + k;
+        if (!alive[i] && this.time >= reviveAt[i]) { alive[i] = 1; if (grown[i] === 0) this.rejitter(i); }
+        this.dye[i] *= fade;
+        this.spark[i] *= sparkFade;
+        const d = 31 - Math.clz32(k);
+        const target = alive[i] ? Math.min(1, Math.max(0, this.frontier - d)) : 0;
+        if (grown[i] < target && (k === 1 || grown[base + (k >> 1)] >= 1)) {
+          // Each level grows in about the same time, so the tree spreads outward at a steady pace.
+          grown[i] = Math.min(target, grown[i] + grow);
+          if (grown[i] < 1) this.spark[i] = Math.max(this.spark[i], 0.35);
         }
       }
-      this.ta[i] = a;
-      const step = speed * dt;
-      const x = this.tx[i] + Math.cos(a) * step, y = this.ty[i] + Math.sin(a) * step;
-      this.tspark[i] *= fade;
-      this.tdist[i] += step;
-      // Off the screen, worn out, or about to run into another line: the tip stops.
-      const ahead = CELL * 1.2;
-      if (x < -4 || y < -4 || x > w + 4 || y > h + 4 || this.tdist[i] > this.tlife[i]
-        || (avoid && this.tdist[i] > GRACE && this.blocked(x + Math.cos(a) * ahead, y + Math.sin(a) * ahead, this.tid[i], solid))) {
-        this.lay(this.tlx[i], this.tly[i], x, y, this.tw[i], this.th[i], this.tid[i]);
-        this.removeTip(i);
-        i--;
-        continue;
+      // Shrink from the tips in: a branch only shrinks once everything growing from it is gone.
+      for (let k = N - 1; k >= 1; k--) {
+        const i = base + k;
+        const d = 31 - Math.clz32(k);
+        const target = alive[i] ? Math.min(1, Math.max(0, this.frontier - d)) : 0;
+        if (grown[i] > target) {
+          const c = 2 * k;
+          if (c < N && (grown[base + c] > 0 || grown[base + c + 1] > 0)) continue;
+          grown[i] = Math.max(target, grown[i] - grow * 1.3);
+        }
       }
-      this.tx[i] = x;
-      this.ty[i] = y;
-      if (Math.hypot(x - this.tlx[i], y - this.tly[i]) >= SEG_LEN) {
-        this.lay(this.tlx[i], this.tly[i], x, y, this.tw[i], this.th[i], this.tid[i]);
-        this.tlx[i] = x;
-        this.tly[i] = y;
-      }
-      // Fork now and then: this tip bends one way and a new one leaves the other way.
-      if (Math.random() < branching * dt && this.tdist[i] > GRACE) this.split(i, spread, taper, minWidth);
     }
 
-    // Keep something growing even in silence.
-    this.sproutClock += dt;
-    if (this.tips < 3 && this.sproutClock > 0.35) {
-      this.sproutClock = 0;
-      this.seed(p, null, null, this.seedHue(p));
-    }
-    // Holding the mouse plants trees under it.
-    if (this.pointer && !this.pointer.cut) {
-      this.plantClock += dt;
-      if (this.plantClock > 0.12) {
-        this.plantClock = 0;
-        this.seed(p, this.pointer.x, this.pointer.y, this.seedHue(p), 3, 0.8);
-      }
-    } else if (this.pointer?.cut) {
-      this.cut(this.pointer.x, this.pointer.y, 36);
-    }
-  }
-
-  private split(i: number, spread: number, taper: number, minWidth: number): void {
-    const half = spread * (0.6 + Math.random() * 0.4) / 2;
-    const side = Math.random() < 0.5 ? 1 : -1;
-    const width = Math.max(minWidth, this.tw[i] * taper);
-    // Lay the piece up to the fork so both arms leave from the same point.
-    this.lay(this.tlx[i], this.tly[i], this.tx[i], this.ty[i], this.tw[i], this.th[i], this.tid[i]);
-    this.tlx[i] = this.tx[i];
-    this.tly[i] = this.ty[i];
-    const a = this.ta[i];
-    if (this.addTip(this.tx[i], this.ty[i], a - side * half, width, (this.th[i] + (Math.random() - 0.5) * 12 + 360) % 360, this.tipLife(), this.tspark[i])) {
-      this.ta[i] = a + side * half;
-      this.tw[i] = width;
-    }
-  }
-
-  /** Every tip forks at once. */
-  private splitAll(strength: number): void {
-    const p = this.params;
-    const spread = ((p.spread as number) * Math.PI) / 180;
-    const n = this.tips;
-    for (let i = 0; i < n; i++) {
-      if (Math.random() < strength) {
-        this.split(i, spread * 1.3, p.taper as number, 0.35);
-        this.tspark[i] = Math.max(this.tspark[i], strength);
+    if (this.pointer) {
+      this.pointer.clock -= dt;
+      if (this.pointer.clock <= 0) {
+        this.pointer.clock = 0.12;
+        this.touch(this.pointer.x, this.pointer.y, this.pointer.cut);
       }
     }
   }
 
-  /** Clear lines and tips within `r` of a point. */
-  private cut(x: number, y: number, r: number): void {
-    const r2 = r * r;
-    for (let i = 0; i < this.tips; i++) {
-      if ((this.tx[i] - x) ** 2 + (this.ty[i] - y) ** 2 < r2) { this.removeTip(i); i--; }
+  /** Lay the tree out for this frame: every arm, every branch, ends in `ex`/`ey`. */
+  private layout(p: ParamValues, m: MusicFrame): void {
+    const { width: w, height: h } = this.view;
+    const cx = w / 2, cy = h / 2;
+    const S = this.arms, N = this.N, D = this.depth;
+    const taper = p.taper as number;
+    const R = Math.min(w, h) * 0.5 * (p.size as number);
+    // The trunk length that makes the whole tree reach about R.
+    const L0 = (R * (1 - taper)) / (1 - taper ** (D + 1)) * 1.05;
+    const spread = ((p.spread as number) * Math.PI) / 180 * (1 + this.bend);
+    const asym = p.asymmetry as number;
+    const sway = p.sway as number;
+    const warp = p.warp as number;
+    const spec = m.spectrum;
+    const t = this.time;
+    const { grown, ex, ey, ang } = this;
+    for (let a = 0; a < S; a++) {
+      const base = a * N, sb = this.mirror ? 0 : base;
+      for (let k = 1; k < N; k++) {
+        const i = sb + k, o = base + k;
+        const d = 31 - Math.clz32(k);
+        let px: number, py: number, pa: number;
+        if (k === 1) {
+          pa = this.rotation + (a * Math.PI * 2) / S;
+          px = cx + Math.cos(pa) * L0 * 0.25;
+          py = cy + Math.sin(pa) * L0 * 0.25;
+        } else {
+          const q = base + (k >> 1);
+          px = ex[q]; py = ey[q];
+          pa = ang[q] + ((k & 1) ? -1 : 1) * spread * 0.5;
+        }
+        const angle = pa + this.jitA[i] * asym * 0.55 + sway * 0.25 * Math.sin(t * 0.8 + d * 1.3 + (this.mirror ? 0 : a));
+        const band = spec[Math.min(spec.length - 1, Math.floor((d / D) * spec.length))];
+        const len = L0 * taper ** d * (1 + this.jitL[i] * asym * 0.4) * (1 + warp * band * 0.8) * grown[i];
+        ang[o] = angle;
+        this.sx[o] = px;
+        this.sy[o] = py;
+        ex[o] = px + Math.cos(angle) * len;
+        ey[o] = py + Math.sin(angle) * len;
+      }
     }
-    const { sx0, sy0, sx1, sy1, sb } = this;
-    for (let s = 0; s < this.count; s++) {
-      const mx = (sx0[s] + sx1[s]) / 2, my = (sy0[s] + sy1[s]) / 2;
-      if ((mx - x) ** 2 + (my - y) ** 2 < r2) sb[s] = -1e9;
+  }
+
+  /** The branch end nearest (x, y) within `r`, as [arm, node], or null. */
+  private nearest(x: number, y: number, r: number): [number, number] | null {
+    let best: [number, number] | null = null, bestD = r * r;
+    for (let a = 0; a < this.arms; a++) {
+      for (let k = 2; k < this.N; k++) {
+        if (this.grown[this.slot(a, k)] <= 0) continue;
+        const d = (this.ex[a * this.N + k] - x) ** 2 + (this.ey[a * this.N + k] - y) ** 2;
+        if (d < bestD) { bestD = d; best = [a, k]; }
+      }
     }
-    const c0 = Math.max(0, Math.floor((x - r) / CELL)), c1 = Math.min(this.gw - 1, Math.floor((x + r) / CELL));
-    const r0 = Math.max(0, Math.floor((y - r) / CELL)), r1 = Math.min(this.gh - 1, Math.floor((y + r) / CELL));
-    for (let cy = r0; cy <= r1; cy++) for (let cx = c0; cx <= c1; cx++) this.cellTime[cy * this.gw + cx] = -1e9;
+    return best;
+  }
+
+  /** Clicking regrows the branch under the pointer in a new shape; right-click prunes it for a while. */
+  private touch(x: number, y: number, cut: boolean): void {
+    const hit = this.nearest(x, y, 60);
+    if (!hit) return;
+    const [a, k] = hit;
+    const base = this.mirror ? 0 : a * this.N;
+    // Act a level or two in, so a click moves a visible chunk of the tree.
+    const node = k >= 8 ? k >> 1 : k;
+    if (cut) this.setBranch(base, node, false, 3);
+    else this.regrow(base, node, this.seedHue(), 0.8);
+  }
+
+  private seedHue(): number {
+    return schemeHue(this.params.colours as string, Math.random(), 210, this.beats);
   }
 
   onNote(ev: NoteEvent, p: ParamValues): void {
-    const { width: w, height: h } = this.view;
+    const D = this.depth;
     if (ev.role === "kick") {
-      // A new tree bursts out, more arms the harder the kick.
-      const arms = Math.max(1, Math.round((p.bloom as number) * ev.velocity));
-      this.seed(p, null, null, this.seedHue(p), p.seed === "centre" ? arms : Math.max(1, Math.round(arms / 2)), Math.min(1.5, ev.velocity));
-      this.flash = Math.min(1, this.flash + ev.velocity * 0.6);
+      // A surge of growth, and in Pulse the tree throws itself out to full size.
+      this.boost = Math.min(3, this.boost + ev.velocity * 1.5);
+      this.lastKick = this.beats;
+      this.flash = Math.min(1, this.flash + ev.velocity * 0.7);
+      if (p.style === "pulse") this.frontier = D + 0.5;
     } else if (ev.role === "snare") {
-      this.splitAll(Math.min(1, ev.velocity * (p.snareSplit as number)));
+      // Prunes a few outer branches; they grow back later in a new shape.
+      const n = Math.round((p.snarePrune as number) * ev.velocity * 4);
+      for (const base of this.bases()) {
+        for (let j = 0; j < n; j++) {
+          const k = this.randomNode(Math.max(2, D - 3));
+          this.setBranch(base, k, false, 0.8);
+        }
+      }
     } else if (ev.role === "hat") {
-      // A few tips spark.
-      for (let k = 0; k < 4 && this.tips > 0; k++) {
-        const i = Math.floor(Math.random() * this.tips);
-        this.tspark[i] = Math.max(this.tspark[i], ev.velocity);
+      for (let j = 0; j < 6; j++) {
+        const i = (this.mirror ? 0 : Math.floor(Math.random() * this.arms) * this.N) + this.randomNode(D - 1);
+        if (this.grown[i] > 0) this.spark[i] = Math.max(this.spark[i], ev.velocity);
       }
     } else if (ev.role === "tone") {
-      // A sprout where the note lands, low notes left and high notes right, in the note's colour.
+      // The branch the note points at (low notes one side, high the other) regrows in the note's colour.
       if (ev.velocity <= 0.02) return;
-      const x = w * (0.08 + ev.x * 0.84);
-      const y = p.seed === "ground" ? h - 2 : h * (0.25 + Math.random() * 0.5);
-      const hue = p.colours === "notes" ? noteHue(ev.note) : this.seedHue(p);
-      this.seed(p, x, y, hue, p.seed === "ground" ? 1 : 2, Math.min(1.5, ev.velocity));
+      const d = Math.min(3, D - 1);
+      const k = (1 << d) + Math.min((1 << d) - 1, Math.floor(ev.x * (1 << d)));
+      const hue = p.colours === "notes" ? noteHue(ev.note) : this.seedHue();
+      const arm = this.mirror ? 0 : Math.floor(Math.random() * this.arms);
+      if (p.noteRegrow as boolean) this.regrow(arm * (this.mirror ? 0 : this.N), k, hue, Math.min(1, ev.velocity));
+      else this.dyeBranch(arm * (this.mirror ? 0 : this.N), k, hue, Math.min(1, ev.velocity));
     } else if (ev.role === "bassline") {
-      // Each bass note curls the growing tips, the way it turns set by the note.
-      this.curlSide = ev.note % 2 === 0 ? 1 : -1;
-      this.curl = Math.max(this.curl, (p.curl as number) * ev.velocity);
+      // The bass line opens and closes the forks: low notes close them, high notes open them.
+      this.bendTarget = (p.bassBend as number) * (ev.x - 0.5) * 2 * ev.velocity;
     } else if (ev.role === "chord") {
-      // The tips take the chord's colours.
+      // Each level of the tree takes one of the chord's notes.
       const notes = ev.notes ?? [ev.note];
-      for (let i = 0; i < this.tips; i++) this.th[i] = hueToward(this.th[i], noteHue(notes[i % notes.length]), Math.min(1, ev.velocity * 1.2));
+      for (let i = 0; i < this.grown.length; i++) {
+        const k = i % this.N;
+        if (k === 0) continue;
+        const d = 31 - Math.clz32(k);
+        this.dyeHue[i] = this.dye[i] > 0.1 ? hueToward(this.dyeHue[i], noteHue(notes[d % notes.length]), 0.5) : noteHue(notes[d % notes.length]);
+        this.dye[i] = Math.max(this.dye[i], 0.55 * ev.velocity);
+      }
+    }
+  }
+
+  private dyeBranch(base: number, k: number, hue: number, amount: number): void {
+    for (let lo = k, hi = k; lo < this.N; lo = lo * 2, hi = hi * 2 + 1) {
+      for (let j = lo; j <= Math.min(hi, this.N - 1); j++) {
+        this.dyeHue[base + j] = hue;
+        this.dye[base + j] = Math.max(this.dye[base + j], amount);
+        this.spark[base + j] = Math.max(this.spark[base + j], amount * 0.6);
+      }
     }
   }
 
   onPointer(input: PointerInput): void {
     if (input.type === "up") { this.pointer = null; return; }
-    const cut = input.button === 2 || input.shift;
-    if (input.type === "down") {
-      this.pointer = { x: input.x, y: input.y, cut };
-      if (!cut) {
-        this.plantClock = 0;
-        this.seed(this.params, input.x, input.y, this.seedHue(this.params), 5, 1);
-      }
-    } else if (this.pointer) {
-      this.pointer.x = input.x;
-      this.pointer.y = input.y;
-    }
+    if (input.type === "down") this.pointer = { x: input.x, y: input.y, cut: input.button === 2 || input.shift, clock: 0 };
+    else if (this.pointer) { this.pointer.x = input.x; this.pointer.y = input.y; }
   }
 
-  /**
-   * How visible piece `s` is, 0..1: it fades over Fade seconds, and the
-   * oldest quarter of a full buffer fades out before it is overwritten.
-   */
-  private alpha(s: number, life: number): number {
-    const age = (this.time - this.sb[s]) / life;
-    if (age >= 1) return 0;
-    let a = 1 - age;
-    if (this.count === MAX_SEGS) {
-      const fromOldest = ((s - this.head + MAX_SEGS) % MAX_SEGS) / (MAX_SEGS * RING_FADE);
-      if (fromOldest < 1) a *= fromOldest;
-    }
-    return a;
+  /** The colour of a branch: its scheme colour by depth, pulled toward any note colour soaked into it. */
+  private hueOf(i: number, d: number, scheme: string, m: MusicFrame): number {
+    const h = schemeHue(scheme, d / this.depth, m.hue, m.beats);
+    return this.dye[i] > 0.03 ? hueToward(h, this.dyeHue[i], Math.min(1, this.dye[i] * 1.4)) : h;
   }
 
-  /** Line brightness right now. */
-  private bright(p: ParamValues, m: MusicFrame): number {
-    return (p.glow as number) * (0.75 + Math.min(1, m.level) * 0.35 + m.pulse * 0.15 + this.flash * 0.3);
+  private widthAt(d: number, p: ParamValues, m: MusicFrame): number {
+    return (p.lineWidth as number) * (1 - (d / (this.depth + 1)) * 0.65) * (1 + Math.min(1.5, m.bass) * 0.4 + this.flash * 0.3);
   }
 
-  private widthScale(m: MusicFrame): number {
-    return 1 + Math.min(1.5, m.bass) * 0.5;
+  private brightness(p: ParamValues, m: MusicFrame): number {
+    return (p.glow as number) * (0.75 + Math.min(1, m.level) * 0.35 + this.flash * 0.35);
   }
 
-  private readonly cpuStyles: string[] = new Array(HUES * SHADES).fill("");
-  private readonly paths: (Path2D | null)[] = new Array(HUES * SHADES * WIDTHS).fill(null);
+  private readonly cpuPaths: (Path2D | null)[] = [];
 
   render(g: CanvasRenderingContext2D, view: Viewport, p: ParamValues, m: MusicFrame): void {
     applyFeedback(this.fb, g, view, p, this.stepped);
     this.stepped = false;
-    const life = p.fade as number;
-    const bright = this.bright(p, m);
-    const wScale = this.widthScale(m);
-    const maxW = (p.lineWidth as number) * 1.6;
-    for (let b = 0; b < HUES * SHADES; b++) {
-      const shade = ((b % SHADES) + 0.5) / SHADES;
-      this.cpuStyles[b] = `hsla(${(Math.floor(b / SHADES) + 0.5) * (360 / HUES)} 85% ${58 + shade * 12}% / ${Math.min(1, shade * bright)})`;
-    }
-    // One path per hue, brightness and width class: a few dozen strokes a frame instead of thousands.
-    const paths = this.paths;
+    this.layout(p, m);
+    const S = this.arms, N = this.N, D = this.depth;
+    const scheme = p.colours as string;
+    const bright = this.brightness(p, m);
+    // One path per depth and hue: a few dozen strokes a frame.
+    const paths = this.cpuPaths;
+    paths.length = (D + 1) * HUES;
     const used: number[] = [];
-    for (let s = 0; s < this.count; s++) {
-      const a = this.alpha(s, life);
-      if (a < 0.04) continue;
-      const hb = Math.floor(this.sh[s] / (360 / HUES)) % HUES;
-      const wb = Math.min(WIDTHS - 1, Math.floor((this.sw[s] / maxW) * WIDTHS));
-      const bucket = (wb * HUES + hb) * SHADES + Math.min(SHADES - 1, Math.floor(a * SHADES));
-      let path = paths[bucket];
-      if (!path) { path = paths[bucket] = new Path2D(); used.push(bucket); }
-      path.moveTo(this.sx0[s], this.sy0[s]);
-      path.lineTo(this.sx1[s], this.sy1[s]);
+    const node = (p.nodeSize as number) * (1 + m.pulse * 0.4);
+    const dots: number[] = [];
+    for (let a = 0; a < S; a++) {
+      for (let k = 1; k < N; k++) {
+        const i = this.slot(a, k), o = a * N + k;
+        if (this.grown[i] <= 0) continue;
+        const d = 31 - Math.clz32(k);
+        const hb = Math.floor(this.hueOf(i, d, scheme, m) / (360 / HUES)) % HUES;
+        const bucket = d * HUES + hb;
+        let path = paths[bucket];
+        if (!path) { path = paths[bucket] = new Path2D(); used.push(bucket); }
+        path.moveTo(this.sx[o], this.sy[o]);
+        path.lineTo(this.ex[o], this.ey[o]);
+        if (node > 0.05 && this.grown[i] >= 1) dots.push(o, hb);
+      }
     }
-    // Square ends: round ones would overlap at every joint and bead the lines with bright dots.
     g.globalCompositeOperation = "lighter";
+    g.lineCap = "round";
     for (const bucket of used) {
-      const wb = Math.floor(bucket / (HUES * SHADES));
-      g.lineWidth = Math.max(0.5, ((wb + 0.5) / WIDTHS) * maxW * wScale);
-      g.strokeStyle = this.cpuStyles[bucket % (HUES * SHADES)];
+      const d = Math.floor(bucket / HUES), hb = bucket % HUES;
+      g.lineWidth = this.widthAt(d, p, m);
+      g.strokeStyle = `hsla(${(hb + 0.5) * (360 / HUES)} 85% 62% / ${Math.min(1, bright * (1 - d / (D + 2) * 0.4))})`;
       g.stroke(paths[bucket]!);
       paths[bucket] = null;
     }
-    // The growing tips: the piece not yet laid, and a glow where they spark.
-    g.lineWidth = (p.lineWidth as number) * wScale;
-    for (let i = 0; i < this.tips; i++) {
-      g.strokeStyle = `hsl(${this.th[i]} 90% 70%)`;
+    for (let j = 0; j < dots.length; j += 2) {
+      const o = dots[j];
+      g.fillStyle = `hsl(${(dots[j + 1] + 0.5) * (360 / HUES)} 80% 75%)`;
       g.beginPath();
-      g.moveTo(this.tlx[i], this.tly[i]);
-      g.lineTo(this.tx[i], this.ty[i]);
-      g.stroke();
+      g.arc(this.ex[o], this.ey[o], node, 0, Math.PI * 2);
+      g.fill();
     }
     if (p.tipGlow) {
       const dpr = window.devicePixelRatio || 1;
-      const size = (p.lineWidth as number) * 7 * (1 + Math.min(1, m.treble) * 0.6);
-      for (let i = 0, drawn = 0; i < this.tips && drawn < MAX_GLOWS; i++) {
-        const sp = 0.35 + this.tspark[i];
-        const s = size * sp;
-        g.drawImage(glowSprite(this.th[i], 90, s * dpr), this.tx[i] - s / 2, this.ty[i] - s / 2, s, s);
-        drawn++;
+      const size = Math.max(1, p.lineWidth as number) * 10 * (1 + Math.min(1, m.treble) * 0.6);
+      let drawn = 0;
+      for (let a = 0; a < S && drawn < MAX_GLOWS; a++) {
+        for (let k = 1; k < N && drawn < MAX_GLOWS; k++) {
+          const i = this.slot(a, k);
+          const sp = this.spark[i] * Math.min(1, this.grown[i] * 4);
+          if (sp < 0.15) continue;
+          const s = size * sp, o = a * N + k;
+          g.drawImage(glowSprite(this.hueOf(i, 31 - Math.clz32(k), scheme, m), 90, s * dpr), this.ex[o] - s / 2, this.ey[o] - s / 2, s, s);
+          drawn++;
+        }
       }
     }
+    g.lineCap = "butt";
     g.lineWidth = 1;
     g.globalCompositeOperation = "source-over";
   }
@@ -518,41 +464,35 @@ class BranchesSim implements SimulationModel {
   renderGL(gfx: Gfx, _view: Viewport, p: ParamValues, m: MusicFrame): void {
     gfx.feedback(p.afterglow as number, p.zoom as number, p.spin as number, this.stepped);
     this.stepped = false;
-    const life = p.fade as number;
-    const bright = this.bright(p, m);
-    const wScale = this.widthScale(m);
-    const colours = this.glColours;
-    for (let b = 0; b < HUES * SHADES; b++) {
-      const shade = ((b % SHADES) + 0.5) / SHADES;
-      colours[b] = hsla((Math.floor(b / SHADES) + 0.5) * (360 / HUES), 0.85, (58 + shade * 12) / 100, Math.min(1, shade * bright));
-    }
+    this.layout(p, m);
+    const S = this.arms, N = this.N, D = this.depth;
+    const scheme = p.colours as string;
+    const bright = this.brightness(p, m);
+    const node = (p.nodeSize as number) * (1 + m.pulse * 0.4);
+    const size = Math.max(1, p.lineWidth as number) * 10 * (1 + Math.min(1, m.treble) * 0.6);
     gfx.blend("add");
-    for (let s = 0; s < this.count; s++) {
-      const a = this.alpha(s, life);
-      if (a < 0.04) continue;
-      const hb = Math.floor(this.sh[s] / (360 / HUES)) % HUES;
-      gfx.line(this.sx0[s], this.sy0[s], this.sx1[s], this.sy1[s], this.sw[s] * wScale, colours[hb * SHADES + Math.min(SHADES - 1, Math.floor(a * SHADES))], false);
-    }
-    for (let i = 0; i < this.tips; i++) {
-      gfx.line(this.tlx[i], this.tly[i], this.tx[i], this.ty[i], this.tw[i] * wScale, hsla(this.th[i], 0.9, 0.7));
-    }
-    if (p.tipGlow) {
-      const size = (p.lineWidth as number) * 7 * (1 + Math.min(1, m.treble) * 0.6);
-      for (let i = 0, drawn = 0; i < this.tips && drawn < MAX_GLOWS; i++) {
-        gfx.glow(this.tx[i], this.ty[i], size * (0.35 + this.tspark[i]), Math.round(this.th[i] / 10) * 10, 90);
-        drawn++;
+    let drawn = 0;
+    for (let a = 0; a < S; a++) {
+      for (let k = 1; k < N; k++) {
+        const i = this.slot(a, k), o = a * N + k;
+        if (this.grown[i] <= 0) continue;
+        const d = 31 - Math.clz32(k);
+        const hue = this.hueOf(i, d, scheme, m);
+        gfx.line(this.sx[o], this.sy[o], this.ex[o], this.ey[o], this.widthAt(d, p, m), hsla(hue, 0.85, 0.62, Math.min(1, bright * (1 - d / (D + 2) * 0.4))));
+        if (node > 0.05 && this.grown[i] >= 1) gfx.disc(this.ex[o], this.ey[o], node, hsla(hue, 0.8, 0.75));
+        if (p.tipGlow && drawn < MAX_GLOWS) {
+          const sp = this.spark[i] * Math.min(1, this.grown[i] * 4);
+          if (sp >= 0.15) { gfx.glow(this.ex[o], this.ey[o], size * sp, Math.round(hue / 10) * 10, 90); drawn++; }
+        }
       }
     }
     gfx.blend("normal");
   }
 
-  private readonly glColours = new Uint32Array(HUES * SHADES);
-
   stats(): string {
-    const life = (this.params.fade as number) || 1;
     let shown = 0;
-    for (let s = 0; s < this.count; s++) if (this.time - this.sb[s] < life) shown++;
-    return `${this.tips} growing tips · ${shown} line pieces`;
+    for (let a = 0; a < this.arms; a++) for (let k = 1; k < this.N; k++) if (this.grown[this.slot(a, k)] > 0) shown++;
+    return `${shown} of ${this.arms * (this.N - 1)} branches grown`;
   }
 }
 
@@ -560,71 +500,84 @@ export const branches: ModelDefinition = {
   id: "branches",
   name: "Branches",
   category: "Surfaces",
-  description: "Glowing lines that grow, wander and fork into more lines, like coral, lightning or roots. A branch stops when it meets another line, so the tree packs the space the way Living ink does. Kicks sprout new trees, snares fork every growing tip at once, notes sprout where they land (low left, high right) and the bass line curls the branches.",
-  hint: "Click or hold to plant trees under the mouse. Right-drag or Shift-drag to clear lines away.",
+  description: "A living fractal tree: every arm splits in two again and again, and each branch grows out from the one before and dies back tip first. Branches that die regrow at a new angle and length, so like Living ink the shape keeps changing while the symmetry holds. Kicks surge the growth, snares prune the outer branches, each melody note regrows a branch in its colour, the bass line opens and closes the forks and chords colour each level.",
+  hint: "Click or drag over branches to regrow them in a new shape. Right-drag or Shift-drag to prune them for a while.",
   fixedDt: 1 / 60,
   paintsBackground: true,
   params: [
-    { kind: "choice", key: "seed", label: "Grow from", default: "centre", segmented: true, options: SEED_OPTIONS,
-      description: "Where new trees start: the middle of the screen, along the bottom like plants, in from the edges, or anywhere." },
-    { kind: "number", key: "speed", label: "Growth speed", min: 20, max: 800, step: 5, default: 160, curve: curveFor(20, 800, 160), random: [60, 450], global: "energy",
-      description: "How fast the tips grow, in pixels a second. Louder music speeds them up." },
-    { kind: "number", key: "branching", label: "Branching", min: 0, max: 6, step: 0.05, default: 1.6, curve: curveFor(0, 6, 1.6), random: [0.4, 4],
-      description: "How often each tip forks in two, times a second. Zero grows single wandering lines." },
-    { kind: "number", key: "spread", label: "Fork angle", min: 5, max: 150, step: 1, default: 50, random: [15, 110],
-      description: "How wide the two arms of a fork open, in degrees. Narrow looks like lightning; wide looks like coral." },
-    { kind: "number", key: "wander", label: "Wander", min: 0, max: 12, step: 0.1, default: 2, curve: curveFor(0, 12, 2), random: [0.3, 7],
-      description: "How much a tip wobbles as it grows. Low grows straight; high grows twisty, like roots or veins." },
-    { kind: "number", key: "fade", label: "Fade", min: 1, max: 60, step: 0.5, default: 9, curve: curveFor(1, 60, 9), random: [3, 25],
-      description: "How many seconds a line lasts before it fades away. Faded lines stop blocking, so new growth can fill their space." },
-    { kind: "number", key: "lineWidth", label: "Line width", min: 0.4, max: 6, step: 0.1, default: 2.2, random: [0.8, 4],
-      description: "How thick a new tree's trunk is. Each fork is thinner by the Taper; the bass thickens every line." },
-    { kind: "number", key: "maxTips", label: "Growing tips", min: 20, max: 800, step: 10, default: 260, resetOnChange: true, perf: true, advanced: true,
-      description: "The most tips growing at once. More fills the screen faster and is heavier to draw. Rebuilds the scene." },
-    { kind: "number", key: "taper", label: "Taper", min: 0.5, max: 1, step: 0.01, default: 0.82, advanced: true, random: [0.65, 0.98],
-      description: "How much thinner each fork is than the branch it leaves. 1 keeps every branch as thick as the trunk." },
-    { kind: "number", key: "glow", label: "Line glow", min: 0.1, max: 2, step: 0.01, default: 1, advanced: true, random: [0.4, 1.2],
+    { kind: "choice", key: "style", label: "Growth style", default: "breathe", segmented: true, options: STYLE_OPTIONS,
+      description: "How the tree grows and shrinks. Breathe swells out and sinks back with the music's clock; Wander lets branches die and regrow at random; Pulse throws the tree out on every kick and lets it sink between; Seasons grows a full tree, holds it, lets it fall to the trunk, then grows a new one." },
+    { kind: "number", key: "symmetry", label: "Arms", min: 1, max: 12, step: 1, default: 6, resetOnChange: true, random: [3, 10],
+      description: "How many trees grow out from the centre, evenly spaced. Rebuilds the tree." },
+    { kind: "number", key: "spread", label: "Fork angle", min: 5, max: 170, step: 1, default: 60, random: [20, 140],
+      description: "How wide each fork opens, in degrees. Narrow grows tall and spiky; wide curls back into lace." },
+    { kind: "number", key: "speed", label: "Growth speed", min: 0.2, max: 12, step: 0.1, default: 2.5, curve: curveFor(0.2, 12, 2.5), random: [1, 7], global: "energy",
+      description: "How fast branches grow and die back, in branch lengths a second. Kicks surge it." },
+    { kind: "number", key: "change", label: "Change", min: 0, max: 6, step: 0.05, default: 0.8, curve: curveFor(0, 6, 0.8), random: [0.2, 3],
+      description: "How often a branch dies back and regrows in a new shape, times a second. Zero keeps the tree's shape fixed; Wander does it four times as often." },
+    { kind: "number", key: "asymmetry", label: "Wildness", min: 0, max: 1, step: 0.01, default: 0.35, random: [0, 0.8],
+      description: "How far each branch strays from a perfect fractal in angle and length. Zero is crisp and geometric; high grows like a real tree." },
+    { kind: "number", key: "cycle", label: "Cycle", min: 1, max: 64, step: 1, default: 16, curve: curveFor(1, 64, 16), random: [4, 32],
+      showWhen: (p) => p.style !== "wander",
+      format: (v) => (v % 4 === 0 ? `${v / 4} bar${v === 4 ? "" : "s"}` : `${v} beats`),
+      description: "How long one breath, pulse or season lasts, following the tempo." },
+    { kind: "number", key: "size", label: "Size", min: 0.2, max: 1.8, step: 0.01, default: 0.85, random: [0.5, 1.4],
+      description: "How far the full tree reaches, as a share of the screen." },
+    { kind: "number", key: "levels", label: "Levels", min: 3, max: 10, step: 1, default: 8, resetOnChange: true, perf: true, advanced: true,
+      description: "How many times the branches split. Each level doubles the branches, so 10 is heavy to draw. Rebuilds the tree." },
+    { kind: "number", key: "taper", label: "Taper", min: 0.5, max: 0.9, step: 0.01, default: 0.72, advanced: true, random: [0.6, 0.85],
+      description: "How much shorter each branch is than the one it grows from. High reaches far with long twigs; low stays compact." },
+    { kind: "number", key: "rotation", label: "Rotation", min: -90, max: 90, step: 1, default: 6, snapZero: true, advanced: true, random: [-30, 30],
+      description: "How fast the whole tree turns, in degrees a second." },
+    { kind: "number", key: "sway", label: "Sway", min: 0, max: 2, step: 0.01, default: 0.5, advanced: true, random: [0, 1.2],
+      description: "How much the branches sway as if in a breeze." },
+    { kind: "number", key: "lineWidth", label: "Line width", min: 0.3, max: 6, step: 0.1, default: 2.2, advanced: true, random: [0.6, 3.5],
+      description: "How thick the trunks are; branches thin toward the tips. The bass thickens them." },
+    { kind: "number", key: "nodeSize", label: "Joint dots", min: 0, max: 6, step: 0.1, default: 1.4, advanced: true, random: [0, 3],
+      description: "Size of the dot at each fork. Zero leaves only the lines." },
+    { kind: "number", key: "glow", label: "Line glow", min: 0.1, max: 1.5, step: 0.01, default: 0.9, advanced: true, random: [0.4, 1.2],
       description: "How bright the lines are. Where they cross they add up toward white." },
-    { kind: "boolean", key: "avoid", label: "Stop at other lines", default: true, advanced: true,
-      description: "A branch stops when it reaches a line that is still showing, so trees pack the space like coral. Off lets branches cross and tangle." },
+    { kind: "boolean", key: "mirror", label: "Mirror arms", default: true, resetOnChange: true, advanced: true,
+      description: "Every arm grows and dies back the same, like a snowflake. Off lets each arm live its own life." },
+    { kind: "boolean", key: "noteRegrow", label: "Notes regrow branches", default: true, advanced: true,
+      description: "Each melody note makes its branch regrow in a new shape. Off only colours it." },
     { kind: "boolean", key: "tipGlow", label: "Glowing tips", default: true, advanced: true,
-      description: "A small light at each growing tip; it flares on the hi-hats and snares." },
-    // Set by the matrix rows Sprout a tree, Fork every tip and Curl.
-    { kind: "number", key: "bloom", label: "Kick sprout", min: 0, max: 16, step: 1, default: 6, hidden: true },
-    { kind: "number", key: "snareSplit", label: "Snare fork", min: 0, max: 2, step: 0.05, default: 0.7, hidden: true },
-    { kind: "number", key: "curl", label: "Bass curl", min: 0, max: 12, step: 0.1, default: 3, hidden: true },
-    gravityModeParam("off"),
-    { kind: "number", key: "fieldGravity", label: "Field strength", min: 0, max: 2000, step: 10, default: 300, global: "gravity", hidden: true,
-      description: "How hard gravity bends the growing tips toward its pull." },
+      description: "A small light on each growing tip; it sparks on the hi-hats." },
+    // Set by the matrix rows Growth surge, Prune, Open the forks and Spectrum reach.
+    { kind: "number", key: "kickGrow", label: "Kick surge", min: 0, max: 4, step: 0.05, default: 1.5, hidden: true },
+    { kind: "number", key: "snarePrune", label: "Snare prune", min: 0, max: 4, step: 0.05, default: 1, hidden: true },
+    { kind: "number", key: "bassBend", label: "Bass bend", min: 0, max: 1, step: 0.01, default: 0.25, hidden: true },
+    { kind: "number", key: "warp", label: "Spectrum reach", min: 0, max: 2, step: 0.01, default: 0.5, hidden: true },
     colourParam(),
-    ...feedbackParams(0.25),
+    ...feedbackParams(0.4),
   ],
   macros: [
-    { key: "lightning", label: "Lightning", description: "Fast, straight, narrow forks that flash and fade quickly.",
-      targets: [{ param: "speed", amount: 0.5 }, { param: "wander", amount: -0.15 }, { param: "spread", amount: -0.2 }, { param: "branching", amount: 0.3 }, { param: "fade", amount: -0.1 }] },
-    { key: "coral", label: "Coral", description: "Slow, twisting growth with wide forks that packs the screen and lingers.",
-      targets: [{ param: "speed", amount: -0.15 }, { param: "wander", amount: 0.3 }, { param: "spread", amount: 0.35 }, { param: "fade", amount: 0.4 }, { param: "avoid", set: true, at: 0.1 }] },
-    { key: "tangle", label: "Tangle", description: "Branches stop avoiding each other and curl into a dense, glowing knot.",
-      targets: [{ param: "wander", amount: 0.4 }, { param: "branching", amount: 0.25 }, { param: "curl", amount: 0.4 }, { param: "avoid", set: false, at: 0.3 }] },
-    { key: "hyper", label: "Hyperspace", description: "Long trails that fly outward into a turning tunnel.",
+    { key: "bloom", label: "Bloom", description: "Opens the forks wide and grows the tree big and wild.",
+      targets: [{ param: "spread", amount: 0.35 }, { param: "size", amount: 0.15 }, { param: "asymmetry", amount: 0.35 }, { param: "glow", amount: 0.15 }] },
+    { key: "frost", label: "Frost", description: "A crisp, still snowflake: perfect symmetry, narrow forks, no sway.",
+      targets: [{ param: "asymmetry", amount: -0.5 }, { param: "sway", amount: -0.4 }, { param: "spread", amount: -0.15 }, { param: "rotation", amount: -0.05 }, { param: "colours", set: "ice", at: 0.5 }] },
+    { key: "storm", label: "Storm", description: "Branches die and regrow fast, sway hard and surge on every kick.",
+      targets: [{ param: "change", amount: 0.35 }, { param: "speed", amount: 0.3 }, { param: "sway", amount: 0.4 }, { param: "kickGrow", amount: 0.3 }] },
+    { key: "hyper", label: "Hyperspace", description: "Long glowing trails that fly outward into a turning tunnel.",
       targets: [{ param: "afterglow", amount: 0.45 }, { param: "zoom", amount: 0.45 }, { param: "spin", amount: 0.2 }, { param: "glow", amount: -0.15 }] },
   ],
   modulations: [
-    { source: "lfoBar", target: "spread", amount: 0.12 },
+    { source: "lfoBar", target: "spread", amount: 0.08 },
     { source: "kick", target: "lineWidth", amount: 0.15 },
-    { source: "treble", target: "global:trails", amount: 0.1 },
+    { source: "treble", target: "nodeSize", amount: 0.15 },
   ],
   reactions: [
-    { source: "kick", label: "Sprout a tree", text: "A new tree bursts out where trees grow from. The strength is how many arms it has", param: "bloom" },
-    { source: "snare", label: "Fork every tip", text: "Every growing tip forks at once and flares. The strength is how many of them", param: "snareSplit" },
-    { source: "hat", label: "Tip sparks", text: "A few growing tips spark" },
-    { source: "tone", label: "Sprout on notes", text: "A sprout grows where the note lands, low notes left and high notes right, in the note's colour" },
-    { source: "bassline", label: "Curl", text: "Each bass note curls the growing tips one way or the other. The strength is how hard", param: "curl" },
-    { source: "chord", label: "Chord colours", text: "The growing tips take the chord's colours" },
-    { source: "bass", label: "Thicker lines", text: "The bass thickens every line" },
-    { source: "level", label: "Grow and glow", text: "Louder music grows the tips faster and makes the lines brighter" },
+    { source: "kick", label: "Growth surge", text: "Growth surges (in Pulse the tree throws itself out to full size) and the lines flash. The strength is how hard", param: "kickGrow" },
+    { source: "snare", label: "Prune", text: "Prunes a few outer branches; they grow back later in a new shape. The strength is how many", param: "snarePrune" },
+    { source: "hat", label: "Tip sparks", text: "A few branch tips spark" },
+    { source: "tone", label: "Regrow a branch", text: "The branch the note points at (low notes one side, high notes the other) regrows in the note's colour" },
+    { source: "bassline", label: "Open the forks", text: "High bass notes open the forks wider and low ones close them. The strength is how far", param: "bassBend" },
+    { source: "chord", label: "Chord colours", text: "Each level of the tree takes one of the chord's notes" },
+    { source: "bass", label: "Thicker lines", text: "The bass thickens the branches" },
+    { source: "level", label: "Grow and glow", text: "Louder music grows the tree faster and further and makes it brighter" },
     { source: "treble", label: "Bigger tip glow", text: "The glows at the tips grow bigger" },
-    { source: "beat", label: "Beat pulse", text: "The lines pulse brighter on the beat" },
+    { source: "spectrum", label: "Spectrum reach", text: "Each level of branches stretches with its part of the spectrum, trunks with the bass and twigs with the treble. The strength is how much", param: "warp" },
+    { source: "beat", label: "Beat pulse", text: "The joint dots pulse on the beat" },
   ],
   create: () => new BranchesSim(),
 };
