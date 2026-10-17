@@ -476,6 +476,8 @@ export class Studio {
     this.modelSettings = saved && saved.v === MODEL_SETTINGS_VERSION
       ? { v: saved.v, macros: saved.macros, routes: saved.routes, reactions: savedReactions(def, saved) }
       : this.defaultModelSettings(def);
+    // Macros the model gained since the save start at zero.
+    for (const m of def.macros ?? []) if (typeof this.modelSettings.macros[m.key] !== "number") this.modelSettings.macros[m.key] = 0;
     // Drop anything that points at parameters the model no longer has.
     const valid = new Set(this.targets().map((t) => t.id));
     this.modelSettings.routes = this.modelSettings.routes.filter((r) => valid.has(r.target));
