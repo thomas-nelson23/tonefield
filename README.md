@@ -102,7 +102,7 @@ Keyboard: `Space` pause or play the visuals and the music, `Enter` play or stop 
 | Model | What the music does | Interaction |
 | --- | --- | --- |
 | Murmuration | A flock of light streaks chases each note and takes its colour, which spreads bird to bird; chords colour part of the flock, kicks scatter it, snares spin vortices | Hold to attract, right-click to scatter |
-| Branches | A living fractal tree: each arm forks again and again, and branches grow out from the trunk and die back tip first, regrowing in a slightly different shape. Growth style picks the rhythm (Breathe, Wander, Pulse or Seasons). Kicks surge the growth, snares prune the outer branches, each melody note regrows a branch in its colour, the bass opens and closes the forks, chords colour each level | Click or drag to regrow branches in a new shape, right-drag to prune them |
+| Branches | Fractal trees sprout all over the screen, grow out fork by fork, stand a while and dissolve, while new ones grow in the gaps and from the tips of the old, so it keeps spreading and changing like Living ink. Each tree sprouts, blooms or creeps as it grows and retracts, crumbles or fades as it goes. Kicks surge the growth and sprout trees, snares crumble them, notes sprout trees where they land, the bass opens and closes the forks, chords colour the trees | Click or drag to plant trees, right-drag to dissolve them |
 | Living ink | Reaction–diffusion that grows where the spectrum is loud; notes seed blooms, the palette follows the melody | Drag to seed (what you draw stays fed for Brush hold seconds), right-drag to wipe |
 | Cymatics | Glowing sand on a vibrating plate morphs to a new figure with every note; the round plate draws turning mandalas. The plate fills the screen, and with gravity on the sand streams through the figure endlessly | Drag to stir the sand |
 | Plexus | Glowing nodes joined by lines in a pattern you pick: web, constellations, star rings, string art, fractal tree or wave mesh. Nodes spring between patterns, notes fire signals along the lines, kicks burst the shape, the bass bends it | Drag to pull nodes in, right-drag to push them away |
@@ -140,7 +140,7 @@ Every hit, bass note and chord reaches the current model, and every control can 
 
 Two columns:
 
-- **Built into this model**: what the model does with the music by itself, such as Kick → Burst outward, grouped into Drums, Melody and chords, and Loudness. Each group folds to one strength slider that sets every reaction in it; open it for each reaction's own strength, on/off switch and delete button. A reaction's strength is also the control for what it does: Branches' Prune row, say, sets how many branches each snare cuts back. **Restore built-ins** brings back any you deleted and **Reset built-ins** puts them all back at 100%.
+- **Built into this model**: what the model does with the music by itself, such as Kick → Burst outward, grouped into Drums, Melody and chords, and Loudness. Each group folds to one strength slider that sets every reaction in it; open it for each reaction's own strength, on/off switch and delete button. A reaction's strength is also the control for what it does: Branches' Crumble row, say, sets how many trees each snare breaks apart. **Restore built-ins** brings back any you deleted and **Reset built-ins** puts them all back at 100%.
 - **Your routes**: a source pushes a slider, macro or global control by a share of its range, each with a live meter, a dice that rolls a random target and amount, and → to find the slider in the sidebar. Sources are the drums, melody, bass notes and chords, tempo-synced LFOs, audio levels (overall, bass, mids, treble), a few advanced ones, and MIDI (mod wheel, pitch bend and any CC) once a controller is connected. A ♪ under a sidebar slider names what is pushing it and opens the route; the ♪ beside a slider adds one.
 
 **Intensity** scales every reaction and route on every model, **Note decay** sets how long a hit keeps pushing, **Smoothing** stops the audio levels flickering a slider, and the **Visuals** switch in the music panel's header turns it all off. Routes and built-in settings are saved per model.
@@ -250,7 +250,7 @@ src/
     types.ts         the model interface
     registry.ts      list of available models
     boids.ts         Murmuration: flocking light streaks
-    branches.ts      Branches: a fractal tree that grows and dies back
+    branches.ts      Branches: fractal trees that grow and dissolve across the screen
     reaction.ts      Living ink: Gray-Scott reaction-diffusion
     chladni.ts       Cymatics: sand figures on a vibrating plate
     plexus.ts        Plexus: nodes joined by lines in six patterns
