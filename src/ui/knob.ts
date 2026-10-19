@@ -37,6 +37,15 @@ function draggable(
     onChange(spec);
   };
   let drag: { y: number; v: number } | null = null;
+  // A mouse reports hundreds of moves a second; the value is applied once a
+  // frame, from the last one, since every application redraws the control.
+  let pending: number | null = null;
+  let frame = 0;
+  const apply = () => {
+    frame = 0;
+    if (pending !== null) set(pending);
+    pending = null;
+  };
   target.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || document.body.classList.contains("learning")) return;
     drag = { y: e.clientY, v: values[spec.key] as number };
@@ -47,9 +56,12 @@ function draggable(
   target.addEventListener("pointermove", (e) => {
     if (!drag) return;
     const range = spec.max - spec.min;
-    set(drag.v + ((drag.y - e.clientY) / (e.shiftKey ? pixels * 5 : pixels)) * range);
+    pending = drag.v + ((drag.y - e.clientY) / (e.shiftKey ? pixels * 5 : pixels)) * range;
+    if (!frame) frame = requestAnimationFrame(apply);
   });
   const end = () => {
+    if (frame) cancelAnimationFrame(frame);
+    apply();
     drag = null;
     target.classList.remove("dragging");
   };
@@ -99,17 +111,26 @@ export function knob(spec: NumberSpec, values: ParamValues, onChange: (spec: Par
   name.className = "knob-label";
   row.append(svg, name);
   const bipolar = spec.min < 0 && spec.max > 0;
+  // Refreshing every control after a change is cheap only if an unchanged knob touches nothing.
+  let shown = NaN;
+  let shownName = "";
   const show = () => {
     const v = values[spec.key] as number;
+    const text = row.classList.contains("dragging") && spec.format ? spec.format(v) : label;
+    if (text !== shownName) {
+      shownName = text;
+      name.textContent = text;
+    }
+    if (v === shown) return;
+    shown = v;
     const f = (v - spec.min) / (spec.max - spec.min);
     const a = START + f * SWEEP;
     const from = bipolar ? START + ((0 - spec.min) / (spec.max - spec.min)) * SWEEP : START;
     value.setAttribute("d", Math.abs(a - from) < 0.01 ? "" : arc(r, Math.min(from, a), Math.max(from, a)));
-    pointer.setAttribute("x1", String(r + Math.cos(a) * 2));
-    pointer.setAttribute("y1", String(r + Math.sin(a) * 2));
-    pointer.setAttribute("x2", String(r + Math.cos(a) * (r - 6)));
-    pointer.setAttribute("y2", String(r + Math.sin(a) * (r - 6)));
-    name.textContent = row.classList.contains("dragging") && spec.format ? spec.format(v) : label;
+    pointer.setAttribute("x1", (r + Math.cos(a) * 2).toFixed(2));
+    pointer.setAttribute("y1", (r + Math.sin(a) * 2).toFixed(2));
+    pointer.setAttribute("x2", (r + Math.cos(a) * (r - 6)).toFixed(2));
+    pointer.setAttribute("y2", (r + Math.sin(a) * (r - 6)).toFixed(2));
     row.title = describe(spec, v);
   };
   draggable(row, spec, values, onChange, show, 160);
@@ -120,19 +141,17 @@ export function knob(spec: NumberSpec, values: ParamValues, onChange: (spec: Par
 
 /**
  * A vertical channel fader with a level meter beside it. `readout` gets the
- * formatted value. Call `meter` each frame with a 0..1 meter height.
+ * formatted value. The meter's level is drawn over `meter` by the mixer's
+ * live overlay (see ui/overlay.ts), so the fader itself never changes per frame.
  */
 export function fader(
   spec: NumberSpec, values: ParamValues, onChange: (spec: ParamSpec) => void, targetPrefix: string, readout: HTMLElement,
-): Dial & { meter(level: number): void } {
+): Dial & { meter: HTMLElement } {
   const row = document.createElement("div");
   row.className = "param fader";
   row.dataset.target = targetPrefix + spec.key;
   const meterBox = document.createElement("div");
   meterBox.className = "meter-v";
-  const meterFill = document.createElement("div");
-  meterFill.className = "meter-v-fill";
-  meterBox.append(meterFill);
   const slot = document.createElement("div");
   slot.className = "fader-slot";
   const thumb = document.createElement("div");
@@ -143,23 +162,16 @@ export function fader(
   unity.style.bottom = `${((spec.default - spec.min) / (spec.max - spec.min)) * 100}%`;
   slot.append(unity, thumb);
   row.append(meterBox, slot);
+  let shown = NaN;
   const show = () => {
     const v = values[spec.key] as number;
+    if (v === shown) return;
+    shown = v;
     thumb.style.bottom = `${((v - spec.min) / (spec.max - spec.min)) * 100}%`;
     readout.textContent = spec.format ? spec.format(v) : String(v);
     row.title = describe(spec, v);
   };
   draggable(row, spec, values, onChange, show, 140);
   show();
-  let shown = -1;
-  return {
-    el: row,
-    refresh: show,
-    meter(level: number) {
-      const v = Math.round(Math.min(1, level) * 100) / 100;
-      if (v === shown) return;
-      shown = v;
-      meterFill.style.transform = `scaleY(${v})`;
-    },
-  };
+  return { el: row, refresh: show, meter: meterBox };
 }

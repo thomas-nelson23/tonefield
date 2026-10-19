@@ -10,7 +10,10 @@
  * The dashboard frosts its glass with backdrop-filter and big soft shadows.
  * Both are left out here on purpose: in WebKitGTK every blurred shadow is
  * re-blurred on each repaint, which halved the frame rate (PR #24). The glass
- * is a flat tint with a faint sheen instead, and shadows never blur.
+ * is a flat tint with a one-pixel sheen line instead (gradients are resampled
+ * on every repaint too), and shadows never blur. Whatever changes while music
+ * plays (meters, markers) is drawn on a canvas overlay (ui/overlay.ts), never
+ * by moving elements.
  *
  * Everything new should take its colours, corners and type from the tokens
  * below, so restyling stays a matter of changing them in one place.
@@ -56,7 +59,7 @@
   --radius: 8px;          /* panels and cards */
   --radius-sm: 6px;       /* fields */
   --radius-pill: 999px;   /* buttons */
-  --sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 40%);
+  --sheen: inset 0 1px 0 rgba(255, 255, 255, 0.045);   /* a glass edge: a box-shadow line, not a gradient, which Skia resampled on every repaint */
   --glow: 0 0 6px;        /* followed by a colour, for LEDs */
   --ease: 0.12s ease-out;
   --sans: "Sora Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -82,10 +85,14 @@
 
 * { box-sizing: border-box; }
 
+/* Only html carries the field colour: a background on body too would be a
+   second full-window fill on every repaint, and the webview fills on the CPU. */
+html {
+  background: var(--app);
+}
 html, body {
   margin: 0;
   height: 100%;
-  background: var(--app);
   color: var(--text);
   overflow: hidden;
   user-select: none;
@@ -245,13 +252,14 @@ label.check { display: inline-flex; align-items: center; gap: 7px; cursor: point
 
 /* ---- Document area ---- */
 
-#main { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--app); }
+/* No background of its own: the field shows through, and the canvas repaint fills one layer less. */
+#main { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 /* The model's title bar, like a front window on the dashboard: a red icon, the
    name in Michroma and a cyan-to-red line along its top edge. */
 #doc-tabs {
   position: relative;
   display: flex; align-items: center; height: 32px; flex-shrink: 0; padding: 0 14px;
-  background: var(--sheen), var(--panel); border-bottom: 1px solid var(--line);
+  background: var(--panel); box-shadow: var(--sheen); border-bottom: 1px solid var(--line);
 }
 #doc-tabs::after {
   content: ""; position: absolute; top: 0; left: 16px; right: 16px; height: 1px; pointer-events: none;
@@ -290,9 +298,9 @@ label.check { display: inline-flex; align-items: center; gap: 7px; cursor: point
 #update-pop {
   position: fixed; right: 8px; bottom: 38px; z-index: 50;
   width: 360px; padding: 14px 16px;
-  background: var(--sheen), var(--panel); color: var(--text);
+  background: var(--panel); color: var(--text);
   border: 1px solid var(--edge); border-radius: var(--radius);
-  box-shadow: 0 8px 0 -4px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--sheen), 0 8px 0 -4px rgba(0, 0, 0, 0.45);
   user-select: text;
 }
 #update-pop[hidden] { display: none; }
@@ -318,7 +326,7 @@ label.check { display: inline-flex; align-items: center; gap: 7px; cursor: point
   padding: 8px;
 }
 .panel {
-  background: var(--sheen), var(--panel); flex-shrink: 0;
+  background: var(--panel); box-shadow: var(--sheen); flex-shrink: 0;
   border: 1px solid var(--edge); border-radius: var(--radius); overflow: hidden;
 }
 .panel-head {
@@ -480,16 +488,19 @@ canvas.pad { width: 100%; height: 96px; border-radius: var(--radius-sm); backgro
 #macros > .muted { margin: 0; }
 #macros .param > label > span:first-child { color: var(--strong); }
 #macros .mod-badge { color: var(--macro); }
-#macros .mod-marker { background: var(--macro); }
 #macros input[type="range"] { --thumb: var(--macro); }
 
 /* ---- Modulation markers ---- */
 
 .param .readout.modulated { color: var(--cyan); }
-.mod-track { position: relative; height: 2px; margin-top: 1px; visibility: hidden; }
-.mod-track.active { visibility: visible; }
-/* The modulation bar moves by transform, so moving it needs no layout. */
-.mod-marker { position: absolute; top: 0; left: 0; width: 100%; height: 2px; transform-origin: 0 0; transform: scaleX(0); background: var(--cyan); }
+/* The bar itself is drawn on the block's live overlay (ui/overlay.ts); this row only holds its place. */
+.mod-track { height: 2px; margin-top: 1px; }
+
+/* Live bars (meters, modulation markers) are drawn on one canvas per block of
+   controls, so that however many move in a frame the webview repaints one
+   spot per block, not the whole window. */
+.live-block { position: relative; }
+.live-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
 
 body.learning #sidebar .param[data-target],
 body.learning #dock .param[data-target] { outline: 1px dashed var(--edge-strong); outline-offset: 2px; cursor: pointer; }
@@ -545,7 +556,7 @@ body.learning #dock .param.learn-target { outline: 1px solid var(--macro); }
   --part: var(--soft);
   position: relative;
   flex-shrink: 0; display: flex; flex-direction: column; gap: 6px;
-  padding: 10px 12px; background: var(--sheen), var(--panel);
+  padding: 10px 12px; background: var(--panel); box-shadow: var(--sheen);
   border: 1px solid var(--edge); border-radius: var(--radius);
 }
 .seq-part::before {
@@ -629,12 +640,7 @@ button.strip-btn.solo.active { background: var(--solo-bg); border-color: var(--s
 .knob.dragging .knob-label { color: var(--strong); }
 
 .fader { flex: 1; min-height: 70px; display: flex; gap: 5px; align-items: stretch; cursor: ns-resize; touch-action: none; padding: 4px 0; }
-.meter-v { width: 4px; background: var(--well); border-radius: 2px; position: relative; overflow: hidden; }
-.meter-v-fill {
-  position: absolute; inset: 0; transform-origin: bottom; transform: scaleY(0);
-  background: linear-gradient(to top, var(--meter-low) 0%, var(--meter-low) 70%, var(--meter-mid) 85%, var(--meter-high) 100%);
-  background-size: 100% 100%;
-}
+.meter-v { width: 4px; background: var(--well); border-radius: 2px; }
 .fader-slot { width: 4px; background: var(--well); border-radius: 2px; position: relative; }
 .fader-unity { position: absolute; left: -4px; right: -4px; height: 1px; background: rgba(255, 255, 255, 0.18); }
 .fader-thumb {
@@ -792,7 +798,6 @@ button.preset-chip.active { color: var(--part, var(--cyan)); border-color: var(-
 #meters { display: flex; flex-direction: column; gap: 10px; justify-content: center; }
 .meter { display: grid; grid-template-columns: 90px 1fr; align-items: center; color: var(--muted); }
 .meter-track { height: 4px; border-radius: var(--radius-pill); background: var(--track); overflow: hidden; }
-.meter-fill { height: 100%; transform-origin: 0 0; transform: scaleX(0); background: linear-gradient(90deg, rgba(var(--cyan-rgb), 0.5), var(--cyan) 60%, var(--warn) 85%, var(--red)); }
 /* The resolution and drawing pickers in the bottom bar. */
 .bar-select { display: inline-flex; align-items: center; gap: 6px; letter-spacing: 0.04em; }
 .bar-select select { height: 20px; width: auto; padding: 0 20px 0 7px; font-size: 11px; background-position: right 6px center; }
