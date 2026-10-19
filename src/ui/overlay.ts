@@ -3,12 +3,15 @@
  * block (meters, modulation markers) is drawn.
  *
  * Why not move each bar's own element: WebKitGTK repaints without the GPU on
- * Thomas's PC, and it repaints the *whole window* whenever more than ten
- * separate spots changed in a frame (DrawingAreaCoordinatedGraphics only
- * paints individual rects up to that count). Five strip meters plus a few
- * slider markers crossed that line every tick, so each tick repainted every
- * panel, which halved the frame rate while music played. Drawn on one canvas
- * per block, all of a block's bars are one changed spot.
+ * Thomas's PC, and it repaints the *whole window* (the bounding box of what
+ * changed) whenever anything outside the stage canvas changes in a frame:
+ * DrawingAreaCoordinatedGraphics paints separate rects only when there are at
+ * most ten of them and their bounds would waste most of their area, which the
+ * canvas, over a quarter of the window, never allows. Every tick that moved a
+ * meter or marker therefore repainted every panel, which halved the frame rate
+ * while music played. Drawn on one canvas per block, a tick that would show
+ * the same picture touches nothing at all, and one that differs changes a
+ * small area that the webview's bounds rect then covers once.
  *
  * The block is made `position: relative` so the bars' positions can be read
  * off `offsetTop`/`offsetLeft`. Positions are measured once and again only
