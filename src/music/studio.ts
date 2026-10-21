@@ -3,6 +3,7 @@ import { noteHue } from "../models/lib/music";
 import { paintRange, renderParamControls, type ControlOptions, type ParamControls } from "../ui/controls";
 import type { Grade } from "../ui/grade";
 import { knob, fader, type Dial } from "../ui/knob";
+import { LiveOverlay, bar, q } from "../ui/overlay";
 import { segmented } from "../ui/segmented";
 import { AudioEngine, BeatDetector, type DrumKind, type SynthTrack, type TrackKey } from "./audio";
 import { dispatchMidi, openMidi, type MidiInputs } from "./midi";
@@ -75,6 +76,15 @@ const GLOBAL_NUMBERS = GLOBAL_SPECS.filter((p): p is NumberSpec => p.kind === "n
 
 /** Seconds between redraws of the live meters, playheads and modulation bars: about 20 a second. */
 const UI_INTERVAL = 0.04;
+/**
+ * The live UI slows down while frames are slow. Every tick that changes a
+ * panel makes WebKitGTK repaint the window as one rectangle (its drawing area
+ * paints the bounds of what changed once the canvas is part of it), so on a
+ * machine where that repaint is the cost, fewer ticks are most of the cure:
+ * at 25 ticks a second the panels cost about as much as the picture.
+ */
+const UI_INTERVAL_SLOW = 1 / 14;
+const UI_INTERVAL_SLOWER = 1 / 9;
 
 const SYNTH_TRACKS: SynthTrack[] = ["bass", "chords", "melody"];
 
@@ -328,15 +338,6 @@ function saveOpenGroups(set: Set<string>): void {
   }
 }
 
-/** Show a 0..1 level on a horizontal meter, touching the DOM only when it moves a visible step. */
-const meterLevels = new WeakMap<HTMLElement, number>();
-function setMeter(bar: HTMLElement, level: number): void {
-  const v = Math.round(Math.min(1, level) * 100) / 100;
-  if (meterLevels.get(bar) === v) return;
-  meterLevels.set(bar, v);
-  bar.style.transform = `scaleX(${v})`;
-}
-
 function load<T>(key: string): T | null {
   try {
     const raw = localStorage.getItem(key);
@@ -394,7 +395,20 @@ export class Studio {
   private seqControls: { refresh(): void }[] = [];
   private seqTab!: HTMLElement;
   /** Each mixer strip's meter, and the level it last showed (meters fall back slowly, like a peak meter's). */
-  private stripMeters: { key: TrackKey | "master"; dial: ReturnType<typeof fader>; level: number }[] = [];
+  private stripMeters: { key: TrackKey | "master"; level: number }[] = [];
+  /** The mixer's meters, the Audio tab's band meters and the matrix rows' meters, each block drawn on one canvas. */
+  private stripOverlay: LiveOverlay | null = null;
+  private audioOverlay: LiveOverlay | null = null;
+  private matrixOverlay: LiveOverlay | null = null;
+  private builtinOverlay: LiveOverlay | null = null;
+  /** The dock tab showing, so hidden meters cost nothing (and no layout is forced to ask). */
+  private tab = "sequencer";
+  /** Keys changed since the last frame, whose dependent controls refresh together once a frame. */
+  private refreshKeys = new Set<string>();
+  private refreshAll = false;
+  private refreshFrame = 0;
+  /** The melody view's size, kept by a ResizeObserver so drawing never asks the layout. */
+  private melodySize = { w: 0, h: 0 };
   private showStrips: () => void = () => {};
   private ringCtx: CanvasRenderingContext2D | null = null;
   private melodyCtx: CanvasRenderingContext2D | null = null;
@@ -404,9 +418,9 @@ export class Studio {
   private captionsDrawn = "";
   /** Melody and sound preset chips, lit while the controls match them. */
   private presetChips: { button: HTMLButtonElement; values: Partial<SequencerState> }[] = [];
-  private meterBars: Record<string, HTMLElement> = {};
+  private meterLevels: Record<string, number> = {};
   /** Live source bars in the matrix, refreshed while the Modulation tab is open. */
-  private sourceMeters: { bar: HTMLElement; source: () => string }[] = [];
+  private sourceMeters: { level: number; source: () => string }[] = [];
   /** Music that was playing when the simulation was paused, to resume with it. */
   private pausedMusic: { seq: boolean; file: boolean } | null = null;
   private player: HTMLAudioElement | null = null;
@@ -416,6 +430,11 @@ export class Studio {
   /** When the live meters and modulation bars last redrew (see UI_INTERVAL), and whether this frame is one of those. */
   private uiAt = -1;
   private uiDue = true;
+  /** Every other tick is one where the sidebar's modulation markers redraw; the meters redraw on all of them. */
+  private uiTicks = 0;
+  private markersDue = true;
+  /** Smoothed milliseconds per frame, for choosing the live UI's rate. */
+  private frameMs = 16;
   private lastTone = { hue: 210, pitch: 0.5 };
   private chordHue = 210;
 
@@ -578,6 +597,7 @@ export class Studio {
     const tabs = document.querySelectorAll<HTMLButtonElement>("#dock-tabs [data-tab]");
     tabs.forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     document.querySelectorAll<HTMLElement>("#dock-body .tab").forEach((p) => (p.hidden = p.dataset.tab !== name));
+    this.tab = name;
     if ($("dock").classList.contains("collapsed")) this.setDockHidden(false);
   }
 
@@ -611,9 +631,12 @@ export class Studio {
     // The meters and modulation bars only redraw every few frames. Each redraw
     // makes the webview repaint the panels around them on the CPU, and doing
     // that every frame cut the frame rate by more than half while music played.
+    this.frameMs += (Math.min(dt, 0.25) * 1000 - this.frameMs) * 0.05;
+    const interval = this.frameMs > 30 ? UI_INTERVAL_SLOWER : this.frameMs > 19 ? UI_INTERVAL_SLOW : UI_INTERVAL;
     const sinceUi = nowSeconds - this.uiAt;
-    this.uiDue = sinceUi >= UI_INTERVAL || sinceUi < 0;
+    this.uiDue = sinceUi >= interval || sinceUi < 0;
     if (this.uiDue) {
+      this.markersDue = (++this.uiTicks & 1) === 0;
       this.drawSequencer(Math.min(sinceUi, 0.25));
       this.updateMeters();
       this.uiAt = nowSeconds;
@@ -706,7 +729,7 @@ export class Studio {
     applyReactions(this.def, (src) => this.reaction(src as ReactionSource), this.base);
     applyModulation(this.def, this.base, this.modelSettings.macros, this.modelSettings.routes, this.sources, out, this.macroOut, depth);
     applyEnergy(this.def, g, out);
-    if (this.uiDue) {
+    if (this.uiDue && this.markersDue) {
       this.paramControls?.showModulation(out);
       this.macroControls?.showModulation(this.macroOut);
       this.globalControls?.showModulation(g);
@@ -1035,10 +1058,12 @@ export class Studio {
       else player.pause();
     });
     const meters = $("meters");
+    this.audioOverlay = new LiveOverlay(meters, (o) => { o.fill = o.colour("--cyan", "#2ad4ff"); });
     for (const k of ["level", "bass", "mid", "treble"]) {
-      const bar = el("div", { className: "meter-fill" });
-      meters.append(el("div", { className: "meter" }, el("span", { textContent: sourceLabel(k) }), el("div", { className: "meter-track" }, bar)));
-      this.meterBars[k] = bar;
+      const track = el("div", { className: "meter-track" });
+      meters.append(el("div", { className: "meter" }, el("span", { textContent: sourceLabel(k) }), track));
+      this.meterLevels[k] = 0;
+      this.audioOverlay.add(track, (g, x, y, w, h) => bar(g, x, y, w * Math.min(1, this.meterLevels[k]), h), () => this.meterLevels[k] > 0);
     }
   }
 
@@ -1170,12 +1195,8 @@ export class Studio {
     this.seqTab = document.querySelector<HTMLElement>('#dock-body .tab[data-tab="sequencer"]')!;
     const changed = (spec: ParamSpec) => {
       if (spec.key === "chordStyle") this.seq.refreshHarmony();
-      // Steps and density change each other's readouts (hits, offset within the length),
-      // and the mixer and the Master panel share some controls.
-      if (/^(kick|snare|hat)(Length|Density|Rotate)$/.test(spec.key) || /^(echo|space|master)/.test(spec.key)) this.refreshSeqControls();
-      if (/^(kick|snare|hat)Mode$/.test(spec.key)) this.showDrumModes();
       this.seq.version++;
-      this.showPresetChips();
+      this.refreshSoon(spec.key);
       this.saveGlobal();
     };
     const render = (box: HTMLElement, specs: ParamSpec[]) => {
@@ -1385,6 +1406,10 @@ export class Studio {
     // The view doubles as an X/Y pad for the distribution: up and down is Bias, across is Spread.
     const canvas = $<HTMLCanvasElement>("melody-view");
     this.melodyCtx = canvas.getContext("2d");
+    new ResizeObserver(() => {
+      this.melodySize = { w: canvas.clientWidth, h: canvas.clientHeight };
+      this.melodyDrawn = "";
+    }).observe(canvas);
     const move = (e: PointerEvent) => {
       const r = canvas.getBoundingClientRect();
       seq.melodySpread = Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * 100) / 100;
@@ -1536,6 +1561,12 @@ export class Studio {
       this.seqControls.push(d);
       return d.el;
     };
+    const bands: [number, number, string][] = [[0, 0.7, "#2ad4ff"], [0.7, 0.85, "#ffb547"], [0.85, 1, "#ff2a4f"]];
+    const overlay = (this.stripOverlay = new LiveOverlay(box, (o) => {
+      bands[0][2] = o.colour("--meter-low", "#2ad4ff");
+      bands[1][2] = o.colour("--meter-mid", "#ffb547");
+      bands[2][2] = o.colour("--meter-high", "#ff2a4f");
+    }));
     for (const t of [...TRACKS, { key: "master" as const, label: "Master" }]) {
       const strip = el("div", { className: `strip${t.key === "master" ? " master" : ""}` });
       strip.dataset.track = t.key;
@@ -1554,7 +1585,19 @@ export class Studio {
       }
       const f = fader(volume, values, changed, "gen:", readout);
       this.seqControls.push(f);
-      this.stripMeters.push({ key: t.key, dial: f, level: 0 });
+      const meter = { key: t.key, level: 0 };
+      this.stripMeters.push(meter);
+      // -48 dB to +6 dB fills the meter, cyan to amber to red near the top.
+      overlay.add(f.meter, (g, x, y, w, h) => {
+        const top = y + h * (1 - meter.level);
+        for (const [from, to, colour] of bands) {
+          const y0 = y + h * (1 - to), y1 = y + h * (1 - from);
+          if (top < y1) {
+            g.fillStyle = colour;
+            g.fillRect(x, Math.max(top, y0), w, y1 - Math.max(top, y0));
+          }
+        }
+      }, () => meter.level > 0);
       const buttons = el("div", { className: "strip-buttons" });
       const entry: (typeof strips)[number] = { key: t.key, strip };
       if (t.key !== "master") {
@@ -1619,6 +1662,29 @@ export class Studio {
     this.showPresetChips();
   }
 
+  /**
+   * Refresh what depends on a changed control, once a frame however many
+   * changes arrive: a dragged knob or a MIDI knob sends hundreds a second,
+   * and each refresh walks every control in the sequencer.
+   */
+  private refreshSoon(key: string, all = false): void {
+    this.refreshKeys.add(key);
+    this.refreshAll ||= all;
+    if (this.refreshFrame) return;
+    this.refreshFrame = requestAnimationFrame(() => {
+      this.refreshFrame = 0;
+      const keys = [...this.refreshKeys];
+      const all = this.refreshAll;
+      this.refreshKeys.clear();
+      this.refreshAll = false;
+      // Steps and density change each other's readouts (hits, offset within the length),
+      // and the mixer and the Master panel share some controls.
+      if (all || keys.some((k) => /^(kick|snare|hat)(Length|Density|Rotate)$/.test(k) || /^(echo|space|master)/.test(k))) this.refreshSeqControls();
+      if (keys.some((k) => /^(kick|snare|hat)Mode$/.test(k))) this.showDrumModes();
+      this.showPresetChips();
+    });
+  }
+
   /** Light the preset chips whose settings match the controls. */
   private showPresetChips(): void {
     const seq = this.settings.seq as unknown as Record<string, unknown>;
@@ -1637,13 +1703,14 @@ export class Studio {
     if (found.spec.kind === "choice" && next === values[key]) return;
     values[key] = next;
     if (key === "chordStyle") this.seq.refreshHarmony();
-    if (/^(kick|snare|hat)Mode$/.test(key)) this.showDrumModes();
     this.seq.version++;
-    this.refreshSeqControls();
+    // The control itself must follow the knob, then whatever depends on it, once a frame.
+    this.refreshSoon(key, true);
     this.saveGlobal();
   }
 
   private ringSize = 176;
+  private ringDrawn = "";
   private padCtx: CanvasRenderingContext2D | null = null;
   /** What the pad last drew, so it only redraws when the map position or modes change. */
   private padDrawn = "";
@@ -1814,13 +1881,15 @@ export class Studio {
   private drawSequencer(elapsed: number): void {
     if (!this.seqTab || this.seqTab.hidden || $("dock").classList.contains("collapsed")) return;
     const peaks = this.audio.peaks();
+    let key = "";
     for (const m of this.stripMeters) {
       // -48 dB to +6 dB fills the meter; it jumps up and falls back gently.
       const p = peaks[m.key];
       const h = p > 0 ? Math.max(0, (20 * Math.log10(p) + 48) / 54) : 0;
       m.level = h > m.level ? h : Math.max(h, m.level - 1.5 * elapsed);
-      m.dial.meter(m.level);
+      key += q(m.level) + ",";
     }
+    this.stripOverlay?.draw(key);
     const track = this.settings.mixerTrack;
     if (track === "drums") {
       this.drawRing();
@@ -1835,8 +1904,12 @@ export class Studio {
     const g = this.ringCtx!;
     const size = this.ringSize, c = size / 2, R = size / 2 - 8;
     const seq = this.settings.seq;
-    g.clearRect(0, 0, size, size);
     const playing = this.seq.playing && this.seq.current >= 0;
+    // Nothing moved since the last draw: a redraw would only make the webview repaint the ring for nothing.
+    const key = [this.seq.version, playing, this.seq.fillPending, this.seq.drumCurrent.join(","), DRUMS.map((d) => q(this.sources.get(d.role) * 0.3)).join(",")].join("|");
+    if (key === this.ringDrawn) return;
+    this.ringDrawn = key;
+    g.clearRect(0, 0, size, size);
     // Each ring has its own number of steps, starting at the top.
     g.strokeStyle = "#1c3442";
     g.lineWidth = 1;
@@ -1934,7 +2007,7 @@ export class Studio {
     const canvas = g.canvas;
     const seq = this.seq;
     const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const { w, h } = this.melodySize;
     if (w === 0) return;
     const cur = seq.melodyCursor;
     const key = [seq.version, cur.tick, cur.note, seq.playing, seq.chordIndex, seq.key, seq.audible("melody"), w, h, dpr].join("|");
@@ -2054,10 +2127,15 @@ export class Studio {
 
   private updateMeters(): void {
     if ($("dock").classList.contains("collapsed")) return;
-    for (const k in this.meterBars) setMeter(this.meterBars[k], this.sources.get(k));
-    for (const m of this.sourceMeters) {
-      if (!m.bar.isConnected || m.bar.offsetParent === null) continue;
-      setMeter(m.bar, Math.abs(this.sources.get(m.source())));
+    if (this.tab === "audio" && this.audioOverlay) {
+      let key = "";
+      for (const k in this.meterLevels) key += q((this.meterLevels[k] = this.sources.get(k))) + ",";
+      this.audioOverlay.draw(key);
+    } else if (this.tab === "modulation") {
+      let key = "";
+      for (const m of this.sourceMeters) key += q((m.level = Math.abs(this.sources.get(m.source())))) + ",";
+      this.builtinOverlay?.draw(key);
+      this.matrixOverlay?.draw(key);
     }
   }
 
@@ -2067,6 +2145,8 @@ export class Studio {
     this.renderReactions();
     const box = $("mod-routes");
     box.replaceChildren();
+    this.matrixOverlay?.dispose();
+    const overlay = (this.matrixOverlay = new LiveOverlay(box, (o) => { o.fill = o.colour("--cyan", "#2ad4ff"); }));
     const targets = this.targets();
     if (this.modelSettings.routes.length === 0) {
       box.append(el("p", { className: "muted", textContent: "No routes. Add one here, or with the ♪ button beside any slider." }));
@@ -2095,9 +2175,10 @@ export class Studio {
       source.value = route.source;
       source.addEventListener("change", () => { route.source = source.value; this.routesChanged(); source.blur(); });
 
-      const meterFill = el("div", { className: "meter-fill" });
-      this.sourceMeters.push({ bar: meterFill, source: () => route.source });
-      const meter = el("div", { className: "meter-track", title: "What this sound is doing right now" }, meterFill);
+      const meter = el("div", { className: "meter-track", title: "What this sound is doing right now" });
+      const live = { level: 0, source: () => route.source };
+      this.sourceMeters.push(live);
+      overlay.add(meter, (g, x, y, w, h) => bar(g, x, y, w * Math.min(1, live.level), h), () => live.level > 0);
 
       // The arrow finds the slider in the sidebar.
       const locate = el("button", { type: "button", className: "small locate", textContent: "→", title: "Show this slider in the sidebar" });
@@ -2178,6 +2259,8 @@ export class Studio {
   private renderReactions(): void {
     const box = $("mod-builtins");
     box.replaceChildren();
+    this.builtinOverlay?.dispose();
+    const overlay = (this.builtinOverlay = new LiveOverlay(box, (o) => { o.fill = o.colour("--cyan", "#2ad4ff"); }));
     $("mod-builtins-title").textContent = this.def ? `Built into ${this.def.name}` : "Built into this model";
     const all = this.def?.reactions ?? [];
     if (all.length === 0) {
@@ -2226,9 +2309,10 @@ export class Studio {
         const spec = all.find((r) => r.source === row.source)!;
         const on = el("input", { type: "checkbox", checked: !row.off, title: "Switch this reaction on or off" });
         const source = el("span", { className: "fixed", textContent: REACTION_LABELS[row.source], title: `Always listens to this sound` });
-        const meterFill = el("div", { className: "meter-fill" });
-        this.sourceMeters.push({ bar: meterFill, source: () => REACTION_METERS[row.source] });
-        const meter = el("div", { className: "meter-track", title: "What this sound is doing right now" }, meterFill);
+        const meter = el("div", { className: "meter-track", title: "What this sound is doing right now" });
+        const live = { level: 0, source: () => REACTION_METERS[row.source] };
+        this.sourceMeters.push(live);
+        overlay.add(meter, (g, x, y, w, h) => bar(g, x, y, w * Math.min(1, live.level), h), () => live.level > 0);
         const target = el("span", { className: "fixed builtin", title: spec.text, textContent: spec.label });
         const amount = el("input", { type: "range", min: "0", max: "2", step: "0.05", value: String(row.amount), title: "How strongly the model reacts. 100% is as designed. Double-click for 100%." });
         paintRange(amount);

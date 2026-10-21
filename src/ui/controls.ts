@@ -1,4 +1,5 @@
 import type { ParamSpec, ParamValues } from "../models/types";
+import { LiveOverlay } from "./overlay";
 
 export interface ParamControls {
   /** Re-read values (e.g. after a MIDI controller moved one) into the controls. */
@@ -16,7 +17,19 @@ export function paintRange(input: HTMLInputElement): void {
   const min = Number(input.min || 0);
   const max = Number(input.max || 100);
   const fill = max > min ? ((Number(input.value) - min) / (max - min)) * 100 : 0;
-  input.style.setProperty("--fill", `${fill}%`);
+  const v = `${fill.toFixed(2)}%`;
+  // An unchanged inline style would still make the webview restyle and repaint the slider.
+  if (fills.get(input) === v) return;
+  fills.set(input, v);
+  input.style.setProperty("--fill", v);
+}
+const fills = new WeakMap<HTMLInputElement, string>();
+/** The live overlay last made on each block of rows, so re-rendering a panel retires it. */
+const blockOverlays = new WeakMap<HTMLElement, LiveOverlay>();
+
+/** Set an element's text only when it differs: setting the same text again still repaints it. */
+export function setText(el: HTMLElement, text: string): void {
+  if (el.textContent !== text) el.textContent = text;
 }
 
 /** Group headings the user has folded away, remembered across models and launches. */
@@ -93,7 +106,22 @@ export function renderParamControls(
   container.classList.toggle("show-help", !!options.help);
   const refreshers: (() => void)[] = [];
   const badges: Record<string, HTMLElement> = {};
-  const sliders: { spec: NumberSpec; marker: HTMLElement; readout: HTMLElement; shown: boolean; drawn: string }[] = [];
+  /** Each slider's modulation bar: `a`..`b` of the track, drawn on its block's overlay while `on`. */
+  const sliders: { spec: NumberSpec; track: HTMLElement; readout: HTMLElement; block: HTMLElement; on: boolean; a: number; b: number }[] = [];
+  /** One live overlay per block of rows (the container, and each group's body), made when a slider lands in it. */
+  const overlays = new Map<HTMLElement, LiveOverlay>();
+  const markerColour = targetPrefix === "macro:" ? "--macro" : "--cyan";
+  const overlayFor = (block: HTMLElement): LiveOverlay => {
+    let o = overlays.get(block);
+    if (!o) {
+      // The container is rendered again for every model; the last render's overlay goes with its rows.
+      blockOverlays.get(block)?.dispose();
+      o = new LiveOverlay(block, (ov) => { ov.fill = ov.colour(markerColour, "#2ad4ff"); });
+      overlays.set(block, o);
+      blockOverlays.set(block, o);
+    }
+    return o;
+  };
   const pads: { spec: Extract<ParamSpec, { kind: "widget" }>; draw(effective?: ParamValues): void }[] = [];
   /** Rows that appear only in some states, and labels that change with them. */
   const contextual: (() => void)[] = [];
@@ -275,8 +303,9 @@ export function renderParamControls(
       }
       const show = () => {
         const v = values[spec.key] as number;
-        input.value = String(curved ? toPos(spec, v) : v);
-        readout.textContent = spec.format ? spec.format(v, values) : formatNumber(v, spec.step);
+        const pos = String(curved ? toPos(spec, v) : v);
+        if (input.value !== pos) input.value = pos;
+        setText(readout, spec.format ? spec.format(v, values) : formatNumber(v, spec.step));
         paintRange(input);
         row.classList.toggle("changed", Math.abs(v - spec.default) > 1e-9);
       };
@@ -301,13 +330,14 @@ export function renderParamControls(
         notify(spec.key);
         changed(spec);
       });
-      // A tick under the slider shows the value modulation is pushing it to.
+      // A bar under the slider shows the value modulation is pushing it to. The
+      // row only holds its place: the bar is drawn on the block's overlay canvas.
       const track = document.createElement("div");
       track.className = "mod-track";
-      const marker = document.createElement("div");
-      marker.className = "mod-marker";
-      track.append(marker);
-      sliders.push({ spec, marker, readout, shown: false, drawn: "" });
+      const block = parentFor(spec.advanced ? "More" : spec.group);
+      const slider = { spec, track, readout, block, on: false, a: 0, b: 0 };
+      sliders.push(slider);
+      overlayFor(block).add(track, (g, x, y, w, h) => g.fillRect(x + slider.a * w, y, Math.max(2, (slider.b - slider.a) * w), h), () => slider.on);
       refreshers.push(show);
       // A pad that moves this parameter tells the slider to follow.
       (dependents[spec.key] ??= []).push(show);
@@ -428,26 +458,26 @@ export function renderParamControls(
       }
     },
     showModulation(effective) {
+      // Each block's overlay redraws only when a bar in it moved a visible step.
+      const keys = new Map<HTMLElement, string>();
       for (const s of sliders) {
         const v = effective[s.spec.key] as number;
         const base = values[s.spec.key] as number;
         const on = Math.abs(v - base) > 1e-9;
         if (on) {
-          // A bar from the slider's own value to where modulation has pushed it.
-          // It only moves when it moves a visible amount: each move makes the
-          // webview repaint the sidebar, which is slow while music plays.
-          const a = toPos(s.spec, Math.min(v, base)), b = toPos(s.spec, Math.max(v, base));
-          const drawn = `translateX(${(a * 100).toFixed(1)}%) scaleX(${Math.max(0.015, b - a).toFixed(3)})`;
-          if (drawn !== s.drawn) {
-            s.drawn = drawn;
-            s.marker.style.transform = drawn;
-          }
+          s.a = toPos(s.spec, Math.min(v, base));
+          s.b = toPos(s.spec, Math.max(v, base));
         }
-        if (on !== s.shown) {
-          s.marker.parentElement!.classList.toggle("active", on);
+        if (on !== s.on) {
+          s.on = on;
           s.readout.classList.toggle("modulated", on);
-          s.shown = on;
         }
+        keys.set(s.block, `${keys.get(s.block) ?? ""}${on ? `${Math.round(s.a * 200)}:${Math.round(s.b * 200)}` : "-"}|`);
+      }
+      for (const [block, key] of keys) {
+        const o = overlays.get(block);
+        if (!o) continue;
+        o.draw(key);
       }
       for (const p of pads) p.draw(effective);
     },
