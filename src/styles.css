@@ -250,6 +250,30 @@ label.check { display: inline-flex; align-items: center; gap: 7px; cursor: point
 #play-pause { min-width: 66px; color: var(--cyan); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.25); }
 #play-pause.paused { background-color: var(--strong); color: var(--accent-ink); box-shadow: none; }
 
+/* The dice: the toolbar's Roll is a cyan pill with the die on it; Undo and Redo sit beside it. */
+button.roll { gap: 6px; }
+button.roll svg { width: 13px; height: 13px; }
+#roll { padding: 0 13px 0 11px; color: var(--cyan); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.25); }
+#roll:hover:not(:disabled) { background-color: var(--cyan); color: var(--accent-ink); }
+#explore-roll { color: var(--cyan); border-color: var(--edge-strong); padding: 0 8px 0 7px; }
+#explore-roll svg { width: 12px; height: 12px; }
+
+/* The Explore panel: the level switch, a row per category with its padlock and die, and the auto setting. */
+#explore-level { display: flex; margin-bottom: 8px; }
+.explore-hint { margin: 0 0 10px; font-size: 11px; line-height: 1.4; min-height: 2.8em; }
+.explore-cat { display: flex; align-items: center; gap: 6px; height: 24px; }
+.explore-cat .cat-name { flex: 1; color: var(--text); transition: color var(--ease); }
+.explore-cat.locked .cat-name { color: var(--muted); }
+.explore-cat > .lock { opacity: 0.55; }
+.explore-cat > .lock.on, .explore-cat:hover > .lock { opacity: 1; }
+.explore-cat > .dice { width: 26px; padding: 0; opacity: 0; transition: opacity var(--ease); }
+.explore-cat:hover > .dice, .explore-cat > .dice:focus-visible { opacity: 1; }
+.explore-cat > .dice svg { width: 13px; height: 13px; display: block; }
+.explore-auto { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 11px; }
+.explore-auto select { flex: 1; min-width: 0; }
+.explore-last { margin: 10px 0 0; font-size: 11px; line-height: 1.4; }
+.explore-last[hidden] { display: none; }
+
 /* ---- Document area ---- */
 
 /* No background of its own: the field shows through, and the canvas repaint fills one layer less. */

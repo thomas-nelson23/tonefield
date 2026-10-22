@@ -769,6 +769,12 @@ export class Sequencer {
     this.generate();
   }
 
+  /** Start again from the seed the state holds, e.g. after the state was put back to how it was. */
+  reload(): void {
+    this.rng = mulberry32(this.state.seed);
+    this.generate();
+  }
+
   /**
    * A fresh start for one part while the others play on: new rhythm and notes
    * for the bass, a new progression for the chords, new loops for the melody.

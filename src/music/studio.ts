@@ -1,5 +1,6 @@
 import { SILENT_MUSIC, type ModRoute, type ModelDefinition, type MusicFrame, type NoteEvent, type ParamSpec, type ParamValues, type ReactionSource } from "../models/types";
 import { noteHue } from "../models/lib/music";
+import { COLOUR_SCHEMES } from "../models/lib/visual";
 import { paintRange, renderParamControls, type ControlOptions, type ParamControls } from "../ui/controls";
 import type { Grade } from "../ui/grade";
 import { knob, fader, type Dial } from "../ui/knob";
@@ -17,6 +18,7 @@ import {
   STEPS, STYLES, TRACKS, Sequencer, applyStyleDensities, chordName, faderGain, sanitizeState, type DrumKey, type SequencerState,
 } from "./sequencer";
 import { GRIDS_COLS, GRIDS_ROWS, gridsName } from "./grids";
+import { DICE_ICON, SWITCH_CHANCE, between, chance, pick, pickOther, randomStep, rollChoice, rollNumber, type RollLevel } from "../roll";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -87,6 +89,21 @@ const UI_INTERVAL_SLOW = 1 / 14;
 const UI_INTERVAL_SLOWER = 1 / 9;
 
 const SYNTH_TRACKS: SynthTrack[] = ["bass", "chords", "melody"];
+
+/** What the dice never touch in the music: mutes, holds, solos, volumes and pans stay as set. */
+const MUSIC_KEEPS = /^(sound|hold)$|Hold$|On$|Solo$|Volume$|Pan$/;
+/** The useful part of some music controls' ranges, for the dice. */
+const MUSIC_BANDS: Record<string, [number, number]> = {
+  tempo: [84, 148], swing: [0, 0.5], energy: [0.3, 0.8], evolve: [0.3, 0.8],
+  bassRange: [1, 5], melodyOctaves: [1, 2.5], melodyLength: [4, 16], melodyRate: [1, 3],
+};
+
+/** What `Studio.snapshot` keeps: the global controls, the model's macros and matrix, and the music's controls. */
+export interface StudioSnapshot {
+  globals: ParamValues;
+  model: { id: string; settings: ModelSettings };
+  seq: ParamValues;
+}
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const choices = (rec: Record<string, { label: string }>) => Object.entries(rec).map(([value, o]) => ({ value, label: o.label }));
@@ -606,6 +623,201 @@ export class Studio {
   /** What the global colour controls do to the finished picture. */
   grade(): Grade {
     return gradeOf(this.globalOut, this.beatsNow);
+  }
+
+  // ---- The dice -----------------------------------------------------------
+
+  /** Musical time in bars, for rolling again every so many. */
+  bars(): number {
+    return this.beatsNow / 4;
+  }
+
+  /** Everything the dice can change on this side, to put back with `restore`. */
+  snapshot(): StudioSnapshot {
+    return {
+      globals: { ...this.settings.globals },
+      model: { id: this.def?.id ?? "", settings: JSON.parse(JSON.stringify(this.modelSettings)) as ModelSettings },
+      seq: { ...(this.settings.seq as unknown as ParamValues) },
+    };
+  }
+
+  restore(s: StudioSnapshot): void {
+    this.setGlobals(sanitizeGlobals(s.globals));
+    if (this.def && s.model.id === this.def.id) {
+      this.modelSettings = JSON.parse(JSON.stringify(s.model.settings)) as ModelSettings;
+      this.macroOut = {};
+      this.saveModel();
+      this.renderMacros();
+      this.renderRoutes();
+    }
+    const seq = this.settings.seq as unknown as ParamValues;
+    for (const k in s.seq) if (!MUSIC_KEEPS.test(k)) seq[k] = s.seq[k];
+    this.seq.reload();
+    this.musicRolled();
+  }
+
+  /**
+   * Roll the global controls. Roll and Wild sometimes land on a built-in
+   * preset instead, so the big looks (Neon tunnel, Noir) turn up too.
+   */
+  rollGlobals(level: RollLevel): string {
+    const g = { ...this.settings.globals };
+    if (level >= 2 && chance(level === 2 ? 0.3 : 0.2)) {
+      const p = pick(BUILT_IN_PRESETS.slice(1));
+      this.setGlobals(presetValues(p));
+      return p.name;
+    }
+    for (const spec of GLOBAL_SPECS) {
+      if (spec.kind === "number") g[spec.key] = rollNumber(spec, g[spec.key] as number, level);
+      else if (spec.kind === "choice") g[spec.key] = rollChoice(spec, g[spec.key] as string, level);
+      // Negative is a lot; only Wild risks it, and rarely.
+      else if (spec.kind === "boolean") g[spec.key] = level === 3 ? chance(0.12) : false;
+    }
+    // Hue cycle keeps turning the colours for ever: usually best left off.
+    if (level >= 1 && chance(0.6)) g.hueCycle = 0;
+    this.setGlobals(sanitizeGlobals(g));
+    return level >= 2 ? `${COLOUR_SCHEMES.find((c) => c.value === g.palette)?.label ?? g.palette}` : "nudged";
+  }
+
+  /** Roll the model's macros: gentle moves, or at Roll and Wild a few pushed and the rest at zero. */
+  rollMacros(level: RollLevel): string | null {
+    const macros = this.def?.macros ?? [];
+    if (macros.length === 0) return null;
+    const m = this.modelSettings.macros;
+    let on = 0;
+    for (const spec of macros) {
+      const v = m[spec.key] ?? 0;
+      if (level === 0) m[spec.key] = v + (Math.random() * 2 - 1) * 0.1;
+      else if (level === 1) m[spec.key] = v + (Math.random() * 2 - 1) * 0.3;
+      else if (level === 2) m[spec.key] = chance(0.5) ? 0 : between(0.15, 0.8);
+      else m[spec.key] = chance(0.25) ? 0 : Math.random();
+      m[spec.key] = Math.round(Math.min(1, Math.max(0, m[spec.key])) * 100) / 100;
+      if (m[spec.key] > 0) on++;
+    }
+    this.macroControls?.refresh();
+    this.saveModel();
+    return `${on} on`;
+  }
+
+  /**
+   * Roll the modulation matrix: amounts drift at Nudge and Shake; Roll
+   * rerolls about half the routes (a new slider each, as the row's own die
+   * does) and the built-in strengths; Wild rerolls every route, sources too.
+   */
+  rollModulation(level: RollLevel): string {
+    const targets = this.targets();
+    const routes = this.modelSettings.routes;
+    const sources = SOURCES.filter((s) => s.group !== "MIDI" && s.group !== "Advanced").map((s) => s.id);
+    const reroll = (r: ModRoute, source: boolean) => {
+      const others = targets.filter((t) => t.id !== r.target);
+      const kind = (id: string) => (id.startsWith("macro:") ? "macro" : id.startsWith("global:") ? "global" : "param");
+      const x = Math.random();
+      const want = x < 0.5 ? "param" : x < 0.75 ? "macro" : "global";
+      const pool = [others.filter((t) => kind(t.id) === want), others, targets].find((p) => p.length);
+      if (pool) r.target = pick(pool).id;
+      r.amount = randomStep(0.25, 1, 0.05) * (chance(0.5) ? -1 : 1);
+      if (source) r.source = pick(sources);
+    };
+    if (level <= 1) {
+      const width = level === 0 ? 0.1 : 0.3;
+      for (const r of routes) r.amount = Math.round(Math.min(1, Math.max(-1, r.amount + (Math.random() * 2 - 1) * width)) * 20) / 20;
+      if (level === 1) for (const row of this.modelSettings.reactions) row.amount = Math.round(Math.min(2, Math.max(0, row.amount + (Math.random() * 2 - 1) * 0.3)) * 20) / 20;
+    } else {
+      for (const r of routes) if (level === 3 || chance(0.5)) reroll(r, level === 3);
+      // Roll keeps the count near where it is; Wild settles on two to six.
+      if (level === 3) {
+        const want = 2 + Math.floor(Math.random() * 5);
+        while (routes.length > want) routes.splice(Math.floor(Math.random() * routes.length), 1);
+        while (routes.length < want && targets.length) {
+          const r: ModRoute = { source: pick(sources), target: targets[0].id, amount: 0.5 };
+          reroll(r, true);
+          routes.push(r);
+        }
+      } else if (chance(0.3) && routes.length < 6 && targets.length) {
+        const r: ModRoute = { source: pick(sources), target: targets[0].id, amount: 0.5 };
+        reroll(r, true);
+        routes.push(r);
+      } else if (chance(0.2) && routes.length > 1) {
+        routes.splice(Math.floor(Math.random() * routes.length), 1);
+      }
+      for (const row of this.modelSettings.reactions) {
+        row.amount = level === 3 ? randomStep(0.25, 2, 0.05) : randomStep(0.5, 1.5, 0.05);
+        if (level === 3) row.off = chance(0.15) || undefined;
+        else delete row.off;
+      }
+    }
+    this.saveModel();
+    this.renderRoutes();
+    return `${routes.length} route${routes.length === 1 ? "" : "s"}`;
+  }
+
+  /**
+   * Roll the music. Nudge moves the pattern sliders a little and gives one
+   * track a fresh go; Shake moves them further and starts a new idea; Roll
+   * can change the style, key, tempo and the named sounds; Wild also rolls
+   * the synth controls themselves. Mutes, holds, volumes and pans are never
+   * touched, so the mix stays yours.
+   */
+  rollMusic(level: RollLevel): string {
+    const seq = this.settings.seq;
+    const values = seq as unknown as ParamValues;
+    const before = seq.style;
+    // The style, scale and root aren't among the PARTS' controls.
+    if (chance(SWITCH_CHANCE[level])) seq.style = pickOther(Object.keys(STYLES), seq.style);
+    if (chance(SWITCH_CHANCE[level])) seq.scale = pickOther(Object.keys(SCALES), seq.scale);
+    if (chance(SWITCH_CHANCE[level])) seq.root = pickOther(ROOTS.map((_, i) => i), seq.root);
+    for (const { part, specs } of PARTS) {
+      for (const spec of specs) {
+        const key = spec.key;
+        if (MUSIC_KEEPS.test(key) || spec.kind === "widget") continue;
+        const sound = spec.group === "Sound";
+        if (part === "Mixer" || part === "Master") {
+          // Only the effects: sends at Roll and Wild, the master effects too.
+          if (level >= 2 && /Echo$|Space$|^echo|^space/.test(key) && spec.kind === "number") {
+            values[key] = key === "echoTime" ? randomStep(spec.min, spec.max, spec.step) : randomStep(spec.min, Math.min(spec.max, 0.6), spec.step);
+          }
+          continue;
+        }
+        if (sound) {
+          // The synth and drum sounds: Wild rolls their controls; Roll picks named sounds below.
+          if (level === 3 && spec.kind === "number" && !/Octave$|Pitch$/.test(key)) values[key] = randomStep(spec.min, spec.max, spec.step);
+          else if (level === 3 && spec.kind === "choice") values[key] = pick(spec.options).value;
+          continue;
+        }
+        // Drum hits and offsets come from the style below; steps only drift at Wild.
+        if (/^(kick|snare|hat)(Density|Rotate|Length)$/.test(key) || /^grids/.test(key)) {
+          if (level === 3 && key.endsWith("Length") && chance(0.25)) values[key] = pick([12, 16, 24, 32]);
+          continue;
+        }
+        if (spec.kind === "number") {
+          const band = MUSIC_BANDS[key] ?? (spec.max - spec.min === 1 ? [0.15, 0.85] as [number, number] : undefined);
+          // Even Wild keeps the tempo somewhere a song can live.
+          values[key] = key === "tempo" && level === 3 ? randomStep(band![0], band![1], spec.step) : rollNumber(spec, values[key] as number, level, band);
+        }
+        else if (spec.kind === "choice") values[key] = rollChoice(spec, values[key] as string, level);
+      }
+    }
+    if (seq.style !== before) applyStyleDensities(seq);
+    if (level >= 1) {
+      this.rollDrums();
+      if (chance(0.4)) Object.assign(seq, pick(MELODY_PRESETS).values);
+    }
+    if (level >= 2) {
+      for (const t of SYNTH_TRACKS) if (chance(level === 3 ? 0.5 : 0.3)) Object.assign(seq, pick(SOUND_PRESETS[t]).values);
+    }
+    if (level === 0) this.seq.reroll(pick(["drums", "bass", "chords", "melody"] as const));
+    else this.seq.newIdea();
+    this.musicRolled();
+    const style = STYLES[seq.style]?.label ?? seq.style;
+    return level >= 2 ? `${style} · ${ROOTS[seq.root]} ${SCALES[seq.scale]?.label.toLowerCase() ?? seq.scale} · ${seq.tempo} bpm` : level === 1 ? "new idea" : "nudged";
+  }
+
+  /** After the dice or an undo changed many music controls at once. */
+  private musicRolled(): void {
+    this.seq.refreshHarmony();
+    this.seqChanged();
+    this.showDrumModes();
+    this.melodyDrawn = this.chipsDrawn = "";
   }
 
   // ---- Per-frame ---------------------------------------------------------
@@ -1234,6 +1446,8 @@ export class Studio {
     ROOTS.forEach((r, i) => root.append(el("option", { value: String(i), textContent: r })));
     root.value = String(seq.root);
     root.addEventListener("change", () => { seq.root = Number(root.value); this.seq.version++; this.saveGlobal(); root.blur(); });
+    // A roll or an undo can change all three at once.
+    this.seqControls.push({ refresh: () => { style.value = seq.style; scale.value = seq.scale; root.value = String(seq.root); } });
     render($("global-sliders"), specsOf("Song"));
     const mute = $<HTMLButtonElement>("seq-mute");
     const showMute = () => {
@@ -2420,21 +2634,12 @@ function savedReactions(def: ModelDefinition, saved: SavedModelSettings): Reacti
   }));
 }
 
-const DICE_ICON =
-  '<svg viewBox="0 0 14 14" aria-hidden="true"><rect x="1.5" y="1.5" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><g fill="currentColor"><circle cx="4.6" cy="4.6" r="1.1"/><circle cx="7" cy="7" r="1.1"/><circle cx="9.4" cy="9.4" r="1.1"/></g></svg>';
-
 /** The small die on a matrix row that rerolls just that row. */
 function diceButton(title: string): HTMLButtonElement {
   const b = el("button", { type: "button", className: "small dice", title });
   b.innerHTML = DICE_ICON;
   b.setAttribute("aria-label", title);
   return b;
-}
-
-/** A random value from min to max on the given step. */
-function randomStep(min: number, max: number, step: number): number {
-  const steps = Math.round((max - min) / step);
-  return Number((min + Math.floor(Math.random() * (steps + 1)) * step).toFixed(6));
 }
 
 function formatAmount(v: number): string {
