@@ -70,7 +70,7 @@ export type ParamSpec = ParamCommon &
        * default sits near the middle; `curveFor` works it out.
        */
       curve?: number;
-      /** The band Randomize rolls inside; the whole range when left out. */
+      /** The band the dice roll inside; the whole range when left out. */
       random?: [number, number];
       /** The slider sticks at zero, for ranges that run both ways. */
       snapZero?: boolean;

@@ -1,5 +1,6 @@
 import type { ParamSpec, ParamValues } from "../models/types";
 import { LiveOverlay } from "./overlay";
+import { LOCK_ICON } from "../roll";
 
 export interface ParamControls {
   /** Re-read values (e.g. after a MIDI controller moved one) into the controls. */
@@ -49,7 +50,7 @@ function saveCollapsed(set: Set<string>): void {
   }
 }
 
-/** Parameters Randomize leaves alone: the keys, and a callback after one is locked or unlocked. */
+/** Parameters the dice leave alone: the keys, and a callback after one is locked or unlocked. */
 export interface ParamLocks {
   keys: Set<string>;
   changed(): void;
@@ -68,8 +69,6 @@ export interface ControlOptions {
 
 type NumberSpec = Extract<ParamSpec, { kind: "number" }>;
 
-const LOCK_ICON =
-  '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.5" width="8" height="5.5" rx="1"/><path class="shackle" d="M4 5.5V4a2 2 0 0 1 4 0v1.5"/></svg>';
 const ROUTE_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 9.5V2.5l5-1v7"/><circle cx="3" cy="9.5" r="1.6"/><circle cx="8" cy="8.5" r="1.6"/></svg>';
 
 /** The slider position (0..1) of a value on a curved slider, and back. */
@@ -91,7 +90,7 @@ function fromPos(spec: NumberSpec, pos: number): number {
  * (`targetPrefix` + key) so MIDI learn can find it. Specs marked `hidden` get
  * no control; `advanced` ones go under a folded "More" heading; `showWhen`
  * ones appear only while their condition holds. With `locks`, each row gets
- * a padlock that keeps the parameter out of Randomize.
+ * a padlock that keeps the parameter out of a roll of the dice.
  */
 export function renderParamControls(
   container: HTMLElement,
@@ -189,7 +188,7 @@ export function renderParamControls(
       const on = keys.every((k) => lockSet.keys.has(k));
       lock.classList.toggle("on", on);
       lock.setAttribute("aria-pressed", String(on));
-      lock.title = on ? "Locked: Randomize leaves this alone. Click to unlock." : "Lock, so Randomize leaves this alone";
+      lock.title = on ? "Locked: the dice leave this alone. Click to unlock." : "Lock, so the dice leave this alone";
     };
     show();
     lock.addEventListener("click", () => {

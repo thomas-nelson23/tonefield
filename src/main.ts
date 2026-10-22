@@ -10,6 +10,8 @@ import { ColourGrade, type Grade } from "./ui/grade";
 import { Gfx } from "./gl/gfx";
 import { setupUpdater } from "./ui/updater";
 import { Studio } from "./music/studio";
+import { Explorer, type ModelSnapshot } from "./ui/explore";
+import { SWITCH_CHANCE, chance, rollChoice, rollNumber, type RollLevel } from "./roll";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -24,8 +26,6 @@ const playPause = $<HTMLButtonElement>("play-pause");
 const stepBtn = $<HTMLButtonElement>("step");
 const resetBtn = $<HTMLButtonElement>("reset");
 const statsEl = $<HTMLElement>("stats");
-const randomizeBtn = $<HTMLButtonElement>("randomize");
-const nudgeBtn = $<HTMLButtonElement>("nudge");
 const paramsResetBtn = $<HTMLButtonElement>("params-reset");
 const helpBtn = $<HTMLButtonElement>("params-help");
 const docTitle = $<HTMLElement>("doc-title");
@@ -295,30 +295,35 @@ function saveLocks(d: ModelDefinition): void {
 }
 
 /**
- * Give every unlocked slider of the model a random value inside its `random`
- * band (its whole range when it has none). Dropdowns, switches and the
- * rebuild controls (counts, resolution and so on) are left alone unless
- * `everything` is set, when the rebuild sizes stay between their minimum and
- * half again their default so a roll never stalls the frame rate.
+ * Roll every unlocked slider of the model as far as the level allows (see
+ * roll.ts): Nudge and Shake move from where they are, Roll lands inside each
+ * slider's `random` band, Wild anywhere. Dropdowns and switches flip with the
+ * level's chance. The rebuild controls (counts, resolution and so on) only
+ * roll at Wild, and then between their minimum and half again their default
+ * so a roll never stalls the frame rate; `live` (the dice rolling by
+ * themselves) leaves them alone at every level. Returns how many changed.
  */
-function randomizeParams(everything: boolean): void {
+function rollParams(level: RollLevel, live: boolean): number {
   let rebuild = false;
+  let changed = 0;
   for (const spec of def.params) {
-    // The global controls and the matrix set these.
+    // The global controls and the matrix set the hidden ones.
     if (spec.kind === "widget" || spec.hidden || locks.has(spec.key)) continue;
-    if (!everything && (spec.kind !== "number" || spec.resetOnChange)) continue;
+    if (spec.resetOnChange && (level < 3 || live)) continue;
     const before = params[spec.key];
     if (spec.kind === "number") {
-      const [lo, hi] = spec.resetOnChange
+      const band: [number, number] | undefined = spec.resetOnChange
         ? [spec.min, Math.min(spec.max, Math.max(spec.min + spec.step, spec.default * 1.5))]
-        : spec.random ?? [spec.min, spec.max];
-      params[spec.key] = randomStep(lo, hi, spec.step);
+        : spec.random;
+      params[spec.key] = spec.resetOnChange ? rollNumber(spec, before as number, 2, band) : rollNumber(spec, before as number, level, band);
     } else if (spec.kind === "choice") {
-      params[spec.key] = spec.options[Math.floor(Math.random() * spec.options.length)].value;
-    } else {
-      params[spec.key] = Math.random() < 0.5;
+      params[spec.key] = rollChoice(spec, before as string, level);
+    } else if (chance(SWITCH_CHANCE[level])) {
+      params[spec.key] = !before;
     }
-    if (spec.resetOnChange && params[spec.key] !== before) {
+    if (params[spec.key] === before) continue;
+    changed++;
+    if (spec.resetOnChange) {
       effective[spec.key] = params[spec.key];
       rebuild = true;
     }
@@ -329,24 +334,31 @@ function randomizeParams(everything: boolean): void {
     dirty = true;
   }
   saveParams();
+  return changed;
 }
 
-/** Move every unlocked slider a little from where it is, so the picture shifts without starting over. */
-function nudgeParams(): void {
+/** The model and its slider values, for the Explore panel's undo. */
+function snapshotModel(): ModelSnapshot {
+  return { id: def.id, params: { ...params } };
+}
+
+/** Put the model and its sliders back; the picture only starts over if a rebuild control differs. */
+function restoreModel(s: ModelSnapshot): void {
+  if (s.id !== def.id) loadModel(s.id);
+  let rebuild = false;
   for (const spec of def.params) {
-    if (spec.kind !== "number" || spec.hidden || spec.resetOnChange || locks.has(spec.key)) continue;
-    const [lo, hi] = spec.random ?? [spec.min, spec.max];
-    const v = (params[spec.key] as number) + (Math.random() - 0.5) * 0.2 * (hi - lo);
-    params[spec.key] = randomStep(Math.max(spec.min, Math.min(v, spec.max)), Math.max(spec.min, Math.min(v, spec.max)), spec.step);
+    if (spec.kind === "widget" || !(spec.key in s.params) || params[spec.key] === s.params[spec.key]) continue;
+    // In place: the studio pushes macros and routes onto this same object.
+    params[spec.key] = s.params[spec.key];
+    if (spec.resetOnChange) rebuild = true;
   }
   paramControls?.refresh();
+  if (rebuild) {
+    effective = { ...params };
+    model.reset(view, effective);
+    dirty = true;
+  }
   saveParams();
-}
-
-/** A random value from `lo` to `hi` on the spec's step. */
-function randomStep(lo: number, hi: number, step: number): number {
-  const steps = Math.floor((hi - lo) / step + 1e-9);
-  return Number((lo + Math.round(Math.random() * steps) * step).toFixed(6));
 }
 
 // ---- Canvas sizing ---------------------------------------------------------
@@ -501,14 +513,6 @@ drawSelect.addEventListener("change", () => {
   drawSelect.blur();
 });
 select.addEventListener("change", () => loadModel(select.value));
-randomizeBtn.addEventListener("click", (e) => {
-  randomizeParams(e.shiftKey);
-  randomizeBtn.blur();
-});
-nudgeBtn.addEventListener("click", () => {
-  nudgeParams();
-  nudgeBtn.blur();
-});
 paramsResetBtn.addEventListener("click", () => {
   resetParams();
   paramsResetBtn.blur();
@@ -532,6 +536,9 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "Space") { e.preventDefault(); setRunning(!running); }
   else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); studio.toggleSequencer(); }
   else if (e.key === "r") resetModel();
+  else if (e.key === "d" && !e.ctrlKey && !e.metaKey && !e.altKey) explorer.roll();
+  else if (e.key === "z" && !e.ctrlKey && !e.metaKey && !e.altKey) explorer.undo();
+  else if (e.key === "Z" && !e.ctrlKey && !e.metaKey && !e.altKey) explorer.redo();
   else if (e.key.toLowerCase() === "s" && !e.ctrlKey && !e.metaKey && !e.altKey) toggleSidebar();
   else if (e.key === "." && !running) stepOnce();
 });
@@ -545,6 +552,7 @@ function frame(now: number): void {
   if (scaleMode === "auto") autoScale(elapsed * 1000);
 
   const notes = studio.frame(now / 1000, elapsed);
+  explorer.frame(studio.bars());
   studio.apply(effective);
   music = studio.music();
   if (running && model.onNote) {
@@ -661,6 +669,16 @@ try {
   // Fall back to the first model.
 }
 loadModel(initial);
+const explorer = new Explorer({
+  studio,
+  modelId: () => def.id,
+  modelName: (id) => findModel(id)?.name ?? id,
+  modelIds: () => models.map((m) => m.id),
+  setModel: loadModel,
+  rollParams,
+  snapshotModel,
+  restoreModel,
+});
 setRunning(true);
 setupRangeFill();
 setupUpdater();
