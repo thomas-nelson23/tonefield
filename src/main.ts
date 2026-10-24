@@ -536,7 +536,8 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "Space") { e.preventDefault(); setRunning(!running); }
   else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); studio.toggleSequencer(); }
   else if (e.key === "r") resetModel();
-  else if (e.key === "d" && !e.ctrlKey && !e.metaKey && !e.altKey) explorer.roll();
+  else if (e.key === "d" && !e.ctrlKey && !e.metaKey && !e.altKey) explorer.roll("visuals");
+  else if (e.key === "m" && !e.ctrlKey && !e.metaKey && !e.altKey) explorer.roll("music");
   else if (e.key === "z" && !e.ctrlKey && !e.metaKey && !e.altKey) explorer.undo();
   else if (e.key === "Z" && !e.ctrlKey && !e.metaKey && !e.altKey) explorer.redo();
   else if (e.key.toLowerCase() === "s" && !e.ctrlKey && !e.metaKey && !e.altKey) toggleSidebar();
@@ -615,7 +616,7 @@ function frame(now: number): void {
     const extra = model.stats?.();
     const scale = renderScale < 1 ? ` · drawn at ${Math.round(renderScale * 100)}%` : "";
     statsEl.textContent = `${Math.round(fps)} fps · ${onGpu ? "GPU" : "CPU"}${scale} · sim ${simMs.toFixed(1)} ms · draw ${drawMs.toFixed(1)} ms${extra ? ` · ${extra}` : ""}`;
-    (window as unknown as { __perf: unknown }).__perf = { fps, simMs, drawMs, renderScale, model: def.id, gpu: onGpu };
+    (window as unknown as { __perf: unknown }).__perf = { fps, simMs, drawMs, renderScale, model: def.id, gpu: onGpu, level: music.level };
   }
   requestAnimationFrame(frame);
 }

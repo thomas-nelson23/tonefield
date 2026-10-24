@@ -1094,6 +1094,9 @@ export class Synth {
       return;
     }
     if (msg.type !== "note") return;
+    // A chord with no notes or a NaN pitch would put NaN into the output, and
+    // NaN never leaves the echo and reverb once it is in them.
+    if (msg.notes.length === 0 || !msg.notes.every(Number.isFinite) || !Number.isFinite(msg.velocity)) return;
     const track = this.tracks[msg.track];
     const p = track.patch;
     let voice = track.voices[0];

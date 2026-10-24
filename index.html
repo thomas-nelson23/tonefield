@@ -23,7 +23,8 @@
         </div>
         <span class="tool-sep"></span>
         <div class="tool-group dice-group">
-          <button type="button" id="roll" class="roll" title="Roll the dice: everything the Explore panel hasn't locked changes, as far as its level allows (D)"></button>
+          <button type="button" id="roll-visuals" class="roll"></button>
+          <button type="button" id="roll-music" class="roll"></button>
           <button type="button" id="undo" title="Back to how it was before the last roll (Z)">Undo</button>
           <button type="button" id="redo" title="Forward again (Shift+Z)">Redo</button>
         </div>
@@ -33,13 +34,22 @@
           <summary class="panel-head">
             <svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1"/><circle cx="15.5" cy="15.5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="15.5" cy="8.5" r="1"/><circle cx="8.5" cy="15.5" r="1"/></svg><span class="panel-title">Explore</span>
             <span class="panel-note" id="explore-note"></span>
-            <button type="button" id="explore-roll" class="panel-action roll" title="Roll the dice (D)"></button>
           </summary>
           <div class="panel-body">
-            <div class="seg" id="explore-level" title="How far a roll goes"></div>
-            <p id="explore-level-hint" class="muted explore-hint"></p>
-            <div id="explore-categories"></div>
-            <label class="explore-auto" title="Roll the unlocked categories again every so many bars of the music, without touching anything that rebuilds the model. Lock the model and the parameters first if you only want the look and the music to keep changing.">Auto <select id="explore-auto"></select></label>
+            <section class="explore-side">
+              <header class="explore-side-head"><span class="section-label">Visuals</span><button type="button" id="explore-roll-visuals" class="small roll"></button></header>
+              <div class="seg" id="level-visuals" title="How far a roll of the visuals goes"></div>
+              <p id="hint-visuals" class="muted explore-hint"></p>
+              <div id="cats-visuals"></div>
+              <label class="explore-auto" title="Roll the unlocked visual categories again every so many bars of the music, without touching anything that rebuilds the model.">Auto <select id="auto-visuals"></select></label>
+            </section>
+            <section class="explore-side">
+              <header class="explore-side-head"><span class="section-label">Music</span><button type="button" id="explore-roll-music" class="small roll"></button></header>
+              <div class="seg" id="level-music" title="How far a roll of the music goes"></div>
+              <p id="hint-music" class="muted explore-hint"></p>
+              <div id="cats-music"></div>
+              <label class="explore-auto" title="Roll the sequencer again every so many bars, so the song keeps changing by itself.">Auto <select id="auto-music"></select></label>
+            </section>
             <p id="explore-last" class="muted explore-last" hidden></p>
           </div>
         </details>
@@ -267,7 +277,7 @@
         <label class="bar-select" title="How many pixels the picture is drawn at. Fewer pixels means more frames a second on a big screen; Auto lowers it only while the frame rate drops under 55.">Resolution <select id="render-scale"></select></label>
         <label class="bar-select" title="What draws the picture. GPU draws with WebGL on the graphics card; CPU is the older Canvas 2D drawing, kept in case the GPU way misbehaves on a machine.">Drawing <select id="draw-mode"><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
         <span class="spacer"></span>
-        <span class="status-hint">Space play/pause · D roll · Z undo · R reset · Enter sequencer · S sidebar</span>
+        <span class="status-hint">Space play/pause · D roll visuals · M roll music · Z undo · R reset · Enter sequencer · S sidebar</span>
         <button type="button" id="update-button" class="bar-toggle" title="Check for updates" hidden><span class="led"></span>Update</button>
         <button type="button" id="sidebar-toggle" class="bar-toggle on" title="Hide the sidebar (S)"><span class="led"></span>Sidebar</button>
       </footer>

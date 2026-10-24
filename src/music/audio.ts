@@ -378,11 +378,13 @@ export class AudioEngine {
       for (let i = a; i <= b; i++) s += this.freq[i];
       return s / ((b - a + 1) * 255);
     };
+    // A NaN in the graph would otherwise reach the models as NaN bands, and a NaN link reach froze Plexus.
+    const finite = (v: number) => (Number.isFinite(v) ? v : 0);
     const raw: AudioBands = {
-      level: Math.min(1, Math.sqrt(sum / this.wave.length) * 3),
-      bass: Math.min(1, band(30, 200) * 1.3),
-      mid: Math.min(1, band(200, 2000) * 1.6),
-      treble: Math.min(1, band(2000, 12000) * 2.2),
+      level: finite(Math.min(1, Math.sqrt(sum / this.wave.length) * 3)),
+      bass: finite(Math.min(1, band(30, 200) * 1.3)),
+      mid: finite(Math.min(1, band(200, 2000) * 1.6)),
+      treble: finite(Math.min(1, band(2000, 12000) * 2.2)),
     };
     // Fast attack, slower release, so levels read as pulses rather than noise.
     const s = this.smoothed;

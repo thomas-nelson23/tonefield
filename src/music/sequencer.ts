@@ -834,6 +834,15 @@ export class Sequencer {
     this.buildCycle(true);
     this.chordIndex = 0;
     this.voicing = [];
+    // While playing, the scheduler is partway through the old cycle: point it
+    // at a chord of the new one and voice it, or the chords would be sent with
+    // no notes until the next change (empty chords reach the synth as NaN,
+    // which silences the whole mix for good once it is in the echo).
+    if (this.schedChord >= 0) {
+      this.schedChord = Math.min(this.schedChord, this.cycle.length - 1);
+      this.chordIndex = this.schedChord;
+      this.voicing = this.voice(this.cycle[this.schedChord]);
+    }
     this.version++;
   }
 
@@ -1504,7 +1513,7 @@ export class Sequencer {
         while (gap < 64 && !this.chordOn(a + gap)) gap++;
         const change = a === this.chordStart;
         const velocity = change ? 0.85 : 0.45 + 0.4 * style.rhythm[step];
-        let notes = this.voicing;
+        let notes = this.voicing.length ? this.voicing : this.voice(c);
         // Epic doubles the chord an octave below and above.
         if (s.chordStyle === "epic") notes = [notes[0] - 12, ...notes, notes[notes.length - 1] + 12];
         if (s.chordOctave) notes = notes.map((n) => n + 12 * s.chordOctave);
