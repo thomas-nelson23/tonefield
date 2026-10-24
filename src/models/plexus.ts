@@ -156,6 +156,7 @@ class PlexusSim implements SimulationModel {
     let reach = (p.reach as number) * (1 + Math.min(1.5, m.bass) * 0.4);
     if (!stars) reach *= 0.4 + this.shape * 1.2;
     else reach *= 1.4;
+    if (!Number.isFinite(reach)) return;
     this.reachNow = reach;
     const cell = Math.max(reach, Math.sqrt((width * height) / 40000), 8);
     const cols = Math.ceil(width / cell) + 1, rows = Math.ceil(height / cell) + 1;

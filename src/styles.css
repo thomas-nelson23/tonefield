@@ -250,17 +250,19 @@ label.check { display: inline-flex; align-items: center; gap: 7px; cursor: point
 #play-pause { min-width: 66px; color: var(--cyan); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.25); }
 #play-pause.paused { background-color: var(--strong); color: var(--accent-ink); box-shadow: none; }
 
-/* The dice: the toolbar's Roll is a cyan pill with the die on it; Undo and Redo sit beside it. */
+/* The dice: the toolbar's two Roll buttons are cyan pills with a die on them; Undo and Redo sit beside them. */
 button.roll { gap: 6px; }
 button.roll svg { width: 13px; height: 13px; }
-#roll { padding: 0 13px 0 11px; color: var(--cyan); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.25); }
-#roll:hover:not(:disabled) { background-color: var(--cyan); color: var(--accent-ink); }
-#explore-roll { color: var(--cyan); border-color: var(--edge-strong); padding: 0 8px 0 7px; }
-#explore-roll svg { width: 12px; height: 12px; }
+#roll-visuals, #roll-music { padding: 0 13px 0 11px; color: var(--cyan); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.25); }
+#roll-visuals:hover:not(:disabled), #roll-music:hover:not(:disabled) { background-color: var(--cyan); color: var(--accent-ink); }
 
-/* The Explore panel: the level switch, a row per category with its padlock and die, and the auto setting. */
-#explore-level { display: flex; margin-bottom: 8px; }
-.explore-hint { margin: 0 0 10px; font-size: 11px; line-height: 1.4; min-height: 2.8em; }
+/* The Explore panel: a Visuals side and a Music side, each with its Roll, level switch, a row per category with its padlock and die, and its auto setting. */
+.explore-side + .explore-side { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.explore-side-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.explore-side-head .roll { height: 20px; padding: 0 9px 0 7px; font-size: 10.5px; color: var(--cyan); border-color: var(--edge-strong); }
+.explore-side-head .roll svg { width: 12px; height: 12px; }
+.explore-side .seg { display: flex; margin-bottom: 8px; }
+.explore-hint { margin: 0 0 8px; font-size: 11px; line-height: 1.4; min-height: 2.8em; }
 .explore-cat { display: flex; align-items: center; gap: 6px; height: 24px; }
 .explore-cat .cat-name { flex: 1; color: var(--text); transition: color var(--ease); }
 .explore-cat.locked .cat-name { color: var(--muted); }
@@ -269,7 +271,7 @@ button.roll svg { width: 13px; height: 13px; }
 .explore-cat > .dice { width: 26px; padding: 0; opacity: 0; transition: opacity var(--ease); }
 .explore-cat:hover > .dice, .explore-cat > .dice:focus-visible { opacity: 1; }
 .explore-cat > .dice svg { width: 13px; height: 13px; display: block; }
-.explore-auto { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 11px; }
+.explore-auto { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--muted); font-size: 11px; }
 .explore-auto select { flex: 1; min-width: 0; }
 .explore-last { margin: 10px 0 0; font-size: 11px; line-height: 1.4; }
 .explore-last[hidden] { display: none; }
