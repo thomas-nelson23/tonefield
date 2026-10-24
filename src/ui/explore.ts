@@ -3,26 +3,44 @@ import type { Studio, StudioSnapshot } from "../music/studio";
 import { DICE_ICON, LEVELS, LOCK_ICON, chance, type RollLevel } from "../roll";
 
 /**
- * The Explore panel: one set of dice for the whole app. A roll changes every
- * category that isn't locked (the model, its sliders, the macros, the global
- * controls, the modulation matrix, the music), as far as the level allows,
- * and every roll can be undone and redone, so exploring is a matter of
- * rolling, locking what you like, and rolling again. Each category also has
- * a die of its own, and the dice can roll by themselves every so many bars.
+ * The Explore panel: two sets of dice, one for the visuals and one for the
+ * music, each with its own Roll, level and auto setting. A roll changes every
+ * category on its side that isn't locked (visuals: the model, its sliders,
+ * the macros, the global controls, the modulation matrix; music: the
+ * sequencer), as far as the level allows, and every roll on either side can
+ * be undone and redone, so exploring is a matter of rolling, locking what you
+ * like, and rolling again. Each category also has a die of its own, and the
+ * dice can roll by themselves every so many bars.
  *
  * All of its DOM work happens on a click or a roll, never per frame (see the
  * repaint notes in music/studio.ts).
  */
 
+export type Side = "visuals" | "music";
 export type Category = "model" | "params" | "macros" | "globals" | "modulation" | "music";
 
-const CATEGORIES: { id: Category; label: string; hint: string }[] = [
-  { id: "model", label: "Model", hint: "Switch to another model. Shake does it now and then, Roll about half the time, Wild always." },
-  { id: "params", label: "Parameters", hint: "The model's sliders, inside their useful bands. Ones you've padlocked stay put. Rebuild sizes (counts, resolution) only move at Wild." },
-  { id: "macros", label: "Macros", hint: "The model's macros: a few pushed, the rest at zero." },
-  { id: "globals", label: "Global controls", hint: "Colour, gravity, energy and trails; sometimes one of the built-in presets." },
-  { id: "modulation", label: "Modulation", hint: "The modulation matrix: route amounts and built-in strengths drift, and at Roll the routes themselves change." },
-  { id: "music", label: "Music", hint: "The sequencer: a new idea, then the style, key, tempo and sounds as the level allows. Mutes, holds and the mixer stay yours." },
+const SIDES: { id: Side; label: string; key: string; hints: string[] }[] = [
+  { id: "visuals", label: "Visuals", key: "D", hints: [
+    "Every slider moves a little from where it is. Nothing switches.",
+    "Sliders move further, and the odd dropdown or switch flips.",
+    "Fresh values across the useful part of every range. Dropdowns, presets and the model can change.",
+    "Anything goes: whole ranges, every switch, rebuild sizes and the stranger corners.",
+  ] },
+  { id: "music", label: "Music", key: "M", hints: [
+    "The pattern sliders move a little, and one track gets a fresh go. Same idea, same style.",
+    "Sliders move further and the song starts a new idea in its style; the odd mode flips.",
+    "A new idea, and the style, key, tempo, presets and named sounds can change.",
+    "Anything goes: the synths' own controls roll too, and the drum patterns can drift against the bar.",
+  ] },
+];
+
+const CATEGORIES: { id: Category; side: Side; label: string; hint: string }[] = [
+  { id: "model", side: "visuals", label: "Model", hint: "Switch to another model. Shake does it now and then, Roll about half the time, Wild always." },
+  { id: "params", side: "visuals", label: "Parameters", hint: "The model's sliders, inside their useful bands. Ones you've padlocked stay put. Rebuild sizes (counts, resolution) only move at Wild." },
+  { id: "macros", side: "visuals", label: "Macros", hint: "The model's macros: a few pushed, the rest at zero." },
+  { id: "globals", side: "visuals", label: "Global controls", hint: "Colour, gravity, energy and trails; sometimes one of the built-in presets." },
+  { id: "modulation", side: "visuals", label: "Modulation", hint: "The modulation matrix: route amounts and built-in strengths drift, and at Roll the routes themselves change." },
+  { id: "music", side: "music", label: "Sequencer", hint: "The whole sequencer, as far as the level allows. Mutes, holds, volumes and pans stay yours." },
 ];
 
 /** Bars between rolls when the dice roll by themselves. */
@@ -32,10 +50,15 @@ const HISTORY = 40;
 /** How likely a roll is to switch model at each level (a category's own die always does). */
 const MODEL_CHANCE = [0, 0.25, 0.5, 1];
 
-interface ExploreSettings {
+interface SideSettings {
   level: RollLevel;
-  locked: Category[];
   auto: number;
+}
+
+interface ExploreSettings {
+  visuals: SideSettings;
+  music: SideSettings;
+  locked: Category[];
 }
 
 /** What the host (main.ts) keeps of a model: which one, and its slider values. */
@@ -65,13 +88,20 @@ export interface ExploreHost {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
+function sanitizeSide(saved: unknown, fallback: SideSettings): SideSettings {
+  const out = { ...fallback };
+  if (!saved || typeof saved !== "object") return out;
+  const s = saved as Partial<SideSettings>;
+  if (typeof s.level === "number" && s.level >= 0 && s.level < LEVELS.length) out.level = Math.round(s.level) as RollLevel;
+  if (typeof s.auto === "number" && AUTO_CHOICES.includes(s.auto)) out.auto = s.auto;
+  return out;
+}
+
 export class Explorer {
-  private settings: ExploreSettings = { level: 2, locked: [], auto: 0 };
+  private settings: ExploreSettings = { visuals: { level: 2, auto: 0 }, music: { level: 2, auto: 0 }, locked: [] };
   private past: Snapshot[] = [];
   private future: Snapshot[] = [];
-  private lastBar = -1;
-  private levelButtons: HTMLButtonElement[] = [];
-  private lockButtons = new Map<Category, HTMLButtonElement>();
+  private lastBar: Record<Side, number> = { visuals: -1, music: -1 };
 
   constructor(private host: ExploreHost) {
     this.load();
@@ -80,11 +110,13 @@ export class Explorer {
 
   private load(): void {
     try {
-      const saved = JSON.parse(localStorage.getItem("ui:explore") ?? "null") as Partial<ExploreSettings> | null;
+      const saved = JSON.parse(localStorage.getItem("ui:explore") ?? "null") as (Partial<ExploreSettings> & Partial<SideSettings>) | null;
       if (!saved) return;
-      if (typeof saved.level === "number" && saved.level >= 0 && saved.level < LEVELS.length) this.settings.level = Math.round(saved.level) as RollLevel;
+      // The first version had one level and one auto setting for everything.
+      const old = sanitizeSide(saved, this.settings.visuals);
+      this.settings.visuals = sanitizeSide(saved.visuals, old);
+      this.settings.music = sanitizeSide(saved.music, old);
       if (Array.isArray(saved.locked)) this.settings.locked = saved.locked.filter((c) => CATEGORIES.some((k) => k.id === c));
-      if (typeof saved.auto === "number" && AUTO_CHOICES.includes(saved.auto)) this.settings.auto = saved.auto;
     } catch {
       // The defaults it is.
     }
@@ -98,33 +130,29 @@ export class Explorer {
     }
   }
 
-  get level(): RollLevel {
-    return this.settings.level;
-  }
-
   locked(c: Category): boolean {
     return this.settings.locked.includes(c);
   }
 
   // ---- Rolling -------------------------------------------------------------
 
-  /** Roll every unlocked category. `live` is a roll the dice made by themselves: nothing rebuilds the model. */
-  roll(live = false): void {
-    const cats = CATEGORIES.map((c) => c.id).filter((c) => !this.locked(c));
+  /** Roll every unlocked category of one side. `live` is a roll the dice made by themselves: nothing rebuilds the model. */
+  roll(side: Side, live = false): void {
+    const cats = CATEGORIES.filter((c) => c.side === side && !this.locked(c.id)).map((c) => c.id);
     if (cats.length === 0) {
-      this.showLast("Everything is locked: unlock a category to roll it.");
+      this.showLast(side === "visuals" ? "Every visual category is locked: unlock one to roll it." : "The sequencer is locked: unlock it to roll it.");
       return;
     }
-    this.rollCategories(cats, live, false);
+    this.rollCategories(cats, this.settings[side].level, live, false);
   }
 
   /** Roll one category whether or not it's locked, from its own die. */
   rollOne(c: Category): void {
-    this.rollCategories([c], false, true);
+    const side = CATEGORIES.find((k) => k.id === c)!.side;
+    this.rollCategories([c], this.settings[side].level, false, true);
   }
 
-  private rollCategories(cats: Category[], live: boolean, forced: boolean): void {
-    const level = this.settings.level;
+  private rollCategories(cats: Category[], level: RollLevel, live: boolean, forced: boolean): void {
     const studio = this.host.studio;
     this.remember();
     const done: string[] = [];
@@ -187,109 +215,115 @@ export class Explorer {
     this.showLast("Forward one roll.");
   }
 
-  /** Called every frame with the musical time in bars: rolls again when the auto setting says so. */
+  /** Called every frame with the musical time in bars: each side rolls again when its auto setting says so. */
   frame(bars: number): void {
-    const every = this.settings.auto;
-    if (every === 0) return;
-    const bar = Math.floor(bars / every);
-    if (bar === this.lastBar) return;
-    // The first bar after switching Auto on only starts the count.
-    const first = this.lastBar < 0;
-    this.lastBar = bar;
-    if (!first) this.roll(true);
+    for (const side of ["visuals", "music"] as const) {
+      const every = this.settings[side].auto;
+      if (every === 0) continue;
+      const bar = Math.floor(bars / every);
+      if (bar === this.lastBar[side]) continue;
+      // The first bar after switching Auto on only starts the count.
+      const first = this.lastBar[side] < 0;
+      this.lastBar[side] = bar;
+      if (!first) this.roll(side, true);
+    }
   }
 
   // ---- The panel -------------------------------------------------------------
 
   private build(): void {
     const s = this.settings;
-    const rollButtons = [$<HTMLButtonElement>("roll"), $<HTMLButtonElement>("explore-roll")];
-    for (const b of rollButtons) {
-      b.innerHTML = `${DICE_ICON}<span>Roll</span>`;
-      b.addEventListener("click", () => { this.roll(); b.blur(); });
-    }
     $("undo").addEventListener("click", () => { this.undo(); $("undo").blur(); });
     $("redo").addEventListener("click", () => { this.redo(); $("redo").blur(); });
 
-    // How far a roll goes.
-    const levels = $("explore-level");
-    const hint = $("explore-level-hint");
-    const showLevel = () => {
-      this.levelButtons.forEach((b, i) => b.classList.toggle("active", i === s.level));
-      hint.textContent = LEVELS[s.level].hint;
-    };
-    LEVELS.forEach((l, i) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = l.name;
-      b.title = l.hint;
-      b.addEventListener("click", () => {
-        s.level = i as RollLevel;
-        showLevel();
-        this.save();
-        b.blur();
-      });
-      this.levelButtons.push(b);
-      levels.append(b);
-    });
-    showLevel();
+    for (const side of SIDES) {
+      const own = s[side.id];
+      for (const b of [$<HTMLButtonElement>(`roll-${side.id}`), $<HTMLButtonElement>(`explore-roll-${side.id}`)]) {
+        b.innerHTML = `${DICE_ICON}<span>${b.id.startsWith("explore") ? "Roll" : side.label}</span>`;
+        b.title = `Roll the ${side.label.toLowerCase()} dice: everything on that side that isn't locked changes, as far as its level allows (${side.key})`;
+        b.addEventListener("click", () => { this.roll(side.id); b.blur(); });
+      }
 
-    // The categories, each with a padlock and a die of its own.
-    const list = $("explore-categories");
-    for (const c of CATEGORIES) {
-      const row = document.createElement("div");
-      row.className = "explore-cat";
-      row.title = c.hint;
-      const lock = document.createElement("button");
-      lock.type = "button";
-      lock.className = "lock";
-      lock.innerHTML = LOCK_ICON;
-      const showLock = () => {
-        const on = this.locked(c.id);
-        lock.classList.toggle("on", on);
-        row.classList.toggle("locked", on);
-        lock.setAttribute("aria-pressed", String(on));
-        lock.title = on ? `Locked: Roll leaves ${c.label.toLowerCase()} alone. Click to unlock.` : `Lock, so Roll leaves ${c.label.toLowerCase()} alone`;
+      // How far a roll goes.
+      const levels = $(`level-${side.id}`);
+      const hint = $(`hint-${side.id}`);
+      const buttons: HTMLButtonElement[] = [];
+      const showLevel = () => {
+        buttons.forEach((b, i) => b.classList.toggle("active", i === own.level));
+        hint.textContent = side.hints[own.level];
       };
-      lock.addEventListener("click", () => {
-        if (this.locked(c.id)) s.locked = s.locked.filter((k) => k !== c.id);
-        else s.locked.push(c.id);
-        showLock();
-        this.showNote();
-        this.save();
-        lock.blur();
+      LEVELS.forEach((l, i) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = l.name;
+        b.title = side.hints[i];
+        b.addEventListener("click", () => {
+          own.level = i as RollLevel;
+          showLevel();
+          this.save();
+          b.blur();
+        });
+        buttons.push(b);
+        levels.append(b);
       });
-      this.lockButtons.set(c.id, lock);
-      showLock();
-      const name = document.createElement("span");
-      name.className = "cat-name";
-      name.textContent = c.label;
-      const die = document.createElement("button");
-      die.type = "button";
-      die.className = "small dice";
-      die.innerHTML = DICE_ICON;
-      die.title = `Roll just ${c.label.toLowerCase()}, locked or not`;
-      die.setAttribute("aria-label", die.title);
-      die.addEventListener("click", () => { this.rollOne(c.id); die.blur(); });
-      row.append(lock, name, die);
-      list.append(row);
-    }
+      showLevel();
 
-    // Rolling by itself.
-    const auto = $<HTMLSelectElement>("explore-auto");
-    for (const n of AUTO_CHOICES) {
-      const o = document.createElement("option");
-      o.value = String(n);
-      o.textContent = n === 0 ? "Off" : `every ${n} bars`;
-      auto.append(o);
+      // The categories, each with a padlock and a die of its own.
+      const list = $(`cats-${side.id}`);
+      for (const c of CATEGORIES.filter((k) => k.side === side.id)) {
+        const row = document.createElement("div");
+        row.className = "explore-cat";
+        row.title = c.hint;
+        const lock = document.createElement("button");
+        lock.type = "button";
+        lock.className = "lock";
+        lock.innerHTML = LOCK_ICON;
+        const showLock = () => {
+          const on = this.locked(c.id);
+          lock.classList.toggle("on", on);
+          row.classList.toggle("locked", on);
+          lock.setAttribute("aria-pressed", String(on));
+          lock.title = on ? `Locked: Roll leaves ${c.label.toLowerCase()} alone. Click to unlock.` : `Lock, so Roll leaves ${c.label.toLowerCase()} alone`;
+        };
+        lock.addEventListener("click", () => {
+          if (this.locked(c.id)) s.locked = s.locked.filter((k) => k !== c.id);
+          else s.locked.push(c.id);
+          showLock();
+          this.showNote();
+          this.save();
+          lock.blur();
+        });
+        showLock();
+        const name = document.createElement("span");
+        name.className = "cat-name";
+        name.textContent = c.label;
+        const die = document.createElement("button");
+        die.type = "button";
+        die.className = "small dice";
+        die.innerHTML = DICE_ICON;
+        die.title = `Roll just ${c.label.toLowerCase()}, locked or not`;
+        die.setAttribute("aria-label", die.title);
+        die.addEventListener("click", () => { this.rollOne(c.id); die.blur(); });
+        row.append(lock, name, die);
+        list.append(row);
+      }
+
+      // Rolling by itself.
+      const auto = $<HTMLSelectElement>(`auto-${side.id}`);
+      for (const n of AUTO_CHOICES) {
+        const o = document.createElement("option");
+        o.value = String(n);
+        o.textContent = n === 0 ? "Off" : `every ${n} bars`;
+        auto.append(o);
+      }
+      auto.value = String(own.auto);
+      auto.addEventListener("change", () => {
+        own.auto = Number(auto.value);
+        this.lastBar[side.id] = -1;
+        this.save();
+        auto.blur();
+      });
     }
-    auto.value = String(s.auto);
-    auto.addEventListener("change", () => {
-      s.auto = Number(auto.value);
-      this.lastBar = -1;
-      this.save();
-      auto.blur();
-    });
 
     this.showNote();
     this.showHistory();

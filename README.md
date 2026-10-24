@@ -77,7 +77,7 @@ Run the setup `.exe`. It installs for your user only, so it needs no admin right
 
 The layout follows Photoshop:
 
-- **Options bar** across the top: the model picker, Pause / Step / Reset, and the dice: **Roll**, **Undo** and **Redo** (see Explore below).
+- **Options bar** across the top: the model picker, Pause / Step / Reset, and the dice: **Visuals**, **Music**, **Undo** and **Redo** (see Explore below).
 - **Canvas** in the middle.
 - **Panels** down the right, each foldable: **Explore** (the dice), the model's description and how to interact with it, its **Macros**, its **Parameters** and the **Global controls**.
 - **Music panel** under the canvas, with the sequencer, modulation, MIDI and audio file tabs.
@@ -85,7 +85,7 @@ The layout follows Photoshop:
 
 ![Explore panel](docs/screenshots/explore.png)
 
-**Explore** is the way in when the controls look like a lot: press **Roll** (or `D`) and everything changes at once, as far as the level you picked allows. **Nudge** moves every slider a little from where it is; **Shake** moves them further and gives the music a new idea; **Roll** lands fresh values across every useful range and can switch the style, the presets and the model; **Wild** goes anywhere, rebuild sizes and new synth sounds included. Each category has a padlock, so once a roll gives you a model, a look or a tune you like, lock it and keep rolling the rest: **Model**, **Parameters** (the padlock beside each slider still applies), **Macros**, **Global controls**, **Modulation** and **Music** (mutes, holds and the mixer are never rolled). Each category has a die of its own too, for rolling just that one. Every roll can be undone (`Z`) and redone (`Shift+Z`), forty rolls back, and **Auto** rolls the unlocked categories again every so many bars of the music, without ever rebuilding the model, so a show can run by itself. A line under the panel says what the last roll did.
+**Explore** is the way in when the controls look like a lot. It has two sets of dice, one for the visuals and one for the music, so a look you like survives a new tune and the other way round. Press **Roll** on the Visuals side (or `D`) and the picture changes at once, as far as the level you picked allows; press **Roll** on the Music side (or `M`) and the song does. Each side has its own level: **Nudge** moves every slider a little from where it is; **Shake** moves them further and, on the music side, starts a new idea in the same style; **Roll** lands fresh values across every useful range and can switch the presets and the model, or the style, key and tempo; **Wild** goes anywhere, rebuild sizes and new synth sounds included. Each category has a padlock, so once a roll gives you a model, a look or a tune you like, lock it and keep rolling the rest: **Model**, **Parameters** (the padlock beside each slider still applies), **Macros**, **Global controls** and **Modulation** on the visuals side, the **Sequencer** on the music side (mutes, holds and the mixer are never rolled). Each category has a die of its own too, for rolling just that one. Every roll on either side can be undone (`Z`) and redone (`Shift+Z`), forty rolls back, and each side's **Auto** rolls it again every so many bars of the music, without ever rebuilding the model, so a show can run by itself with the picture and the song changing at their own pace. A line under the panel says what the last roll did.
 
 **Global controls** apply to every model and stay put when you switch: colour scheme (follow the melody, rainbow, fire, ice or bioluminescent), hue shift and cycle, saturation, brightness, contrast and negative; gravity direction and strength; energy; trails; and tunnel zoom and spin, which make the trails fly outward and turn for a feedback-tunnel effect. The presets dropdown sets them all at once, with ten built in (Neon tunnel, Inferno, Deep sea, Noir and others) and **Save** for your own.
 
@@ -93,7 +93,7 @@ The layout follows Photoshop:
 
 **Parameters** opens on the five to eight controls that change the picture most; the finer ones are under **More**, with the ones that rebuild the model (counts, resolution) marked ↻. Hover a control for what it does, or press **?** to show the descriptions under every control. Double-click a slider to put it back to its default, and **Reset** puts the whole model back; a dot after a label marks a value that is off its default. Values are saved per model. Some controls only appear when they apply (Plexus shows the sliders for the pattern you picked; Cymatics shows Turning for the round plate), and Living ink's **Chemistry** pad moves its feed and kill rates together. The ♪ beside any slider adds a modulation route to it.
 
-Keyboard: `Space` pause or play the visuals and the music, `D` roll the dice, `Z` undo a roll and `Shift+Z` redo it, `Enter` play or stop the sequencer, `R` reset the model, `.` step one frame while paused, `S` show or hide the sidebar.
+Keyboard: `Space` pause or play the visuals and the music, `D` roll the visuals, `M` roll the music, `Z` undo a roll and `Shift+Z` redo it, `Enter` play or stop the sequencer, `R` reset the model, `.` step one frame while paused, `S` show or hide the sidebar.
 
 ## Models
 
@@ -276,7 +276,7 @@ src/
     midi.ts          MIDI input (Tauri events, or Web MIDI in a browser)
   ui/
     controls.ts      builds parameter controls (with padlocks) from a model's spec
-    explore.ts       the Explore panel: the dice, category locks, undo and auto-roll
+    explore.ts       the Explore panel: visual and music dice, category locks, undo and auto-roll
     knob.ts          mixer knobs and faders
     grade.ts         global colour controls applied on the GPU
     panels.ts        foldable sidebar panels
