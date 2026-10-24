@@ -739,6 +739,8 @@ export class Sequencer {
   private queue: { time: number; step: number; drumSteps: number[]; chord: number; melody: { tick: number; note: number }; events: NoteEvent[] }[] = [];
   /** Which chord the scheduler has reached (it runs a little ahead of what's heard). */
   private schedChord = -1;
+  /** Called just before each bar is scheduled, so changes to the song can land on the bar. */
+  onBar: (() => void) | null = null;
 
   constructor(private audio: AudioEngine, state?: SequencerState) {
     this.state = state ?? defaultState();
@@ -773,6 +775,25 @@ export class Sequencer {
   reload(): void {
     this.rng = mulberry32(this.state.seed);
     this.generate();
+  }
+
+  /**
+   * Begin the progression again from its first chord at the next step the
+   * scheduler reaches. Called from `onBar`, so a song that changed on the bar
+   * starts its chords on the bar too, instead of partway through the old
+   * cycle.
+   */
+  restartCycle(): void {
+    this.schedChord = -1;
+    this.chordIndex = 0;
+    this.voicing = [];
+  }
+
+  /** Keep the musical clock continuous across a tempo change while playing. */
+  tempoChanged(oldTempo: number): void {
+    const ctx = this.audio.ctx;
+    if (!this.playing || !ctx || oldTempo === this.state.tempo) return;
+    this.startTime = ctx.currentTime - ((ctx.currentTime - this.startTime) * oldTempo) / this.state.tempo;
   }
 
   /**
@@ -1478,6 +1499,7 @@ export class Sequencer {
       const a = this.abs;
       const step = a % STEPS;
       if (step === 0 && a > 0) this.evolve();
+      if (step === 0 && this.onBar) this.onBar();
       if (this.schedChord < 0 || a >= this.changeAt) this.advanceChord(a);
       const c = this.cycle[this.schedChord];
       const next = this.cycle[(this.schedChord + 1) % this.cycle.length];

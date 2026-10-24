@@ -613,6 +613,10 @@ button.hold.forced { opacity: 0.6; }
 .seq-controls { display: flex; flex-direction: column; gap: 5px; }
 .seq-controls > label:not(.check) { display: grid; grid-template-columns: 46px 1fr; align-items: center; color: var(--muted); }
 .seq-controls select { height: 24px; }
+/* The Song selects' padlocks sit after the select, faint until hovered or locked. */
+.seq-controls > label:not(.check) { grid-template-columns: 46px 1fr auto; }
+.seq-controls > label > .lock { opacity: 0; margin-left: 2px; }
+.seq-controls > label:hover > .lock, .seq-controls > label > .lock.on { opacity: 1; }
 .seq-part .row-buttons { margin-top: 2px; gap: 6px; }
 .part-sliders .param { margin-bottom: 6px; }
 .part-sliders .param label { margin-bottom: 0; color: var(--muted); }
