@@ -40,7 +40,7 @@ const CATEGORIES: { id: Category; side: Side; label: string; hint: string }[] = 
   { id: "macros", side: "visuals", label: "Macros", hint: "The model's macros: a few pushed, the rest at zero." },
   { id: "globals", side: "visuals", label: "Global controls", hint: "Colour, gravity, energy and trails; sometimes one of the built-in presets." },
   { id: "modulation", side: "visuals", label: "Modulation", hint: "The modulation matrix: route amounts and built-in strengths drift, and at Roll the routes themselves change." },
-  { id: "music", side: "music", label: "Sequencer", hint: "The whole sequencer, as far as the level allows. Mutes, holds, volumes and pans stay yours." },
+  { id: "music", side: "music", label: "Sequencer", hint: "The whole sequencer, as far as the level allows. Mutes, holds, volumes and pans stay yours, and so does anything you padlock in the music panel (tempo, key, a sound). While playing, a roll lands on the next bar." },
 ];
 
 /** Bars between rolls when the dice roll by themselves. */
@@ -215,8 +215,13 @@ export class Explorer {
     this.showLast("Forward one roll.");
   }
 
-  /** Called every frame with the musical time in bars: each side rolls again when its auto setting says so. */
-  frame(bars: number): void {
+  /** Called every frame with the musical time in bars: while the sequencer plays, each side rolls again when its auto setting says so. */
+  frame(bars: number, playing: boolean): void {
+    if (!playing) {
+      // The bars are the sequencer's: stopped, nothing rolls, and the count starts over with Play.
+      this.lastBar.visuals = this.lastBar.music = -1;
+      return;
+    }
     for (const side of ["visuals", "music"] as const) {
       const every = this.settings[side].auto;
       if (every === 0) continue;

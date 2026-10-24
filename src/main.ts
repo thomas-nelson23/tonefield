@@ -553,7 +553,7 @@ function frame(now: number): void {
   if (scaleMode === "auto") autoScale(elapsed * 1000);
 
   const notes = studio.frame(now / 1000, elapsed);
-  explorer.frame(studio.bars());
+  explorer.frame(studio.bars(), studio.playing());
   studio.apply(effective);
   music = studio.music();
   if (running && model.onNote) {

@@ -18,7 +18,7 @@ import {
   STEPS, STYLES, TRACKS, Sequencer, applyStyleDensities, chordName, faderGain, sanitizeState, type DrumKey, type SequencerState,
 } from "./sequencer";
 import { GRIDS_COLS, GRIDS_ROWS, gridsName } from "./grids";
-import { DICE_ICON, SWITCH_CHANCE, between, chance, pick, pickOther, randomStep, rollChoice, rollNumber, type RollLevel } from "../roll";
+import { DICE_ICON, LOCK_ICON, SWITCH_CHANCE, between, chance, pick, pickOther, randomStep, rollChoice, rollNumber, type RollLevel } from "../roll";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -392,6 +392,10 @@ export class Studio {
   private beats = new BeatDetector();
   private pending: NoteEvent[] = [];
   private settings: GlobalSettings;
+  /** Sequencer controls the dice leave alone (the padlocks in the music panel), saved in localStorage. */
+  private musicLocks = new Set<string>();
+  /** A roll or an undo of the music made while playing: it lands on the next bar. */
+  private pendingMusic: { seq: SequencerState; then: "new" | "reload" | "drums" | "bass" | "chords" | "melody" } | null = null;
 
   private def: ModelDefinition | null = null;
   private base: ParamValues = {};
@@ -472,6 +476,12 @@ export class Studio {
     if (![...TRACKS.map((t) => t.key), "master"].includes(this.settings.mixerTrack)) this.settings.mixerTrack = "drums";
     if (!DRUMS.some((d) => d.key === this.settings.drumVoice)) this.settings.drumVoice = "kick";
     this.seq = liveSeq = new Sequencer(this.audio, seq);
+    this.seq.onBar = () => this.landMusic();
+    try {
+      for (const k of JSON.parse(localStorage.getItem("ui:locks:music") ?? "[]") as string[]) if (typeof k === "string") this.musicLocks.add(k);
+    } catch {
+      // No locks, then.
+    }
     this.audio.mix(this.seq.mixSettings());
     for (const t of SYNTH_TRACKS) this.audio.patch(t, this.seq.patch(t));
     this.sources.decay = this.settings.decay;
@@ -632,12 +642,17 @@ export class Studio {
     return this.beatsNow / 4;
   }
 
+  /** Whether the sequencer is playing (the dice only roll by themselves while it is). */
+  playing(): boolean {
+    return this.seq.playing;
+  }
+
   /** Everything the dice can change on this side, to put back with `restore`. */
   snapshot(): StudioSnapshot {
     return {
       globals: { ...this.settings.globals },
       model: { id: this.def?.id ?? "", settings: JSON.parse(JSON.stringify(this.modelSettings)) as ModelSettings },
-      seq: { ...(this.settings.seq as unknown as ParamValues) },
+      seq: { ...(this.musicValues() as unknown as ParamValues) },
     };
   }
 
@@ -650,10 +665,51 @@ export class Studio {
       this.renderMacros();
       this.renderRoutes();
     }
-    const seq = this.settings.seq as unknown as ParamValues;
+    const seq = { ...this.settings.seq } as unknown as ParamValues;
     for (const k in s.seq) if (!MUSIC_KEEPS.test(k)) seq[k] = s.seq[k];
-    this.seq.reload();
+    this.applyMusic(seq as unknown as SequencerState, "reload");
+  }
+
+  /** The sequencer's values as the dice see them: what's about to land, else what's playing. */
+  private musicValues(): SequencerState {
+    return this.pendingMusic?.seq ?? this.settings.seq;
+  }
+
+  /**
+   * Make `next` the song. While the sequencer plays it waits for the bar, so
+   * the new song starts on a downbeat instead of partway through the old
+   * one; stopped, it lands at once. Returns whether it's waiting.
+   */
+  private applyMusic(next: SequencerState, then: "new" | "reload" | "drums" | "bass" | "chords" | "melody"): boolean {
+    this.pendingMusic = { seq: next, then };
+    if (this.seq.playing) return true;
+    this.landMusic();
+    return false;
+  }
+
+  /** Put the pending song in place (from the scheduler at the bar, or straight away when stopped). */
+  private landMusic(): void {
+    const p = this.pendingMusic;
+    if (!p) return;
+    this.pendingMusic = null;
+    const live = this.settings.seq;
+    const oldTempo = live.tempo;
+    Object.assign(live, p.seq);
+    this.seq.tempoChanged(oldTempo);
+    if (p.then === "new") this.seq.newIdea();
+    else if (p.then === "reload") this.seq.reload();
+    else this.seq.reroll(p.then);
+    if (this.seq.playing && p.then !== "drums" && p.then !== "melody") this.seq.restartCycle();
     this.musicRolled();
+  }
+
+  private saveMusicLocks(): void {
+    try {
+      if (this.musicLocks.size) localStorage.setItem("ui:locks:music", JSON.stringify([...this.musicLocks]));
+      else localStorage.removeItem("ui:locks:music");
+    } catch {
+      // Only a convenience.
+    }
   }
 
   /**
@@ -759,17 +815,18 @@ export class Studio {
    * touched, so the mix stays yours.
    */
   rollMusic(level: RollLevel): string {
-    const seq = this.settings.seq;
+    const was = this.musicValues();
+    const seq = { ...was };
     const values = seq as unknown as ParamValues;
-    const before = seq.style;
+    const locked = (k: string) => this.musicLocks.has(k);
     // The style, scale and root aren't among the PARTS' controls.
-    if (chance(SWITCH_CHANCE[level])) seq.style = pickOther(Object.keys(STYLES), seq.style);
-    if (chance(SWITCH_CHANCE[level])) seq.scale = pickOther(Object.keys(SCALES), seq.scale);
-    if (chance(SWITCH_CHANCE[level])) seq.root = pickOther(ROOTS.map((_, i) => i), seq.root);
+    if (!locked("style") && chance(SWITCH_CHANCE[level])) seq.style = pickOther(Object.keys(STYLES), seq.style);
+    if (!locked("scale") && chance(SWITCH_CHANCE[level])) seq.scale = pickOther(Object.keys(SCALES), seq.scale);
+    if (!locked("root") && chance(SWITCH_CHANCE[level])) seq.root = pickOther(ROOTS.map((_, i) => i), seq.root);
     for (const { part, specs } of PARTS) {
       for (const spec of specs) {
         const key = spec.key;
-        if (MUSIC_KEEPS.test(key) || spec.kind === "widget") continue;
+        if (MUSIC_KEEPS.test(key) || spec.kind === "widget" || locked(key)) continue;
         const sound = spec.group === "Sound";
         if (part === "Mixer" || part === "Master") {
           // Only the effects: sends at Roll and Wild, the master effects too.
@@ -797,19 +854,21 @@ export class Studio {
         else if (spec.kind === "choice") values[key] = rollChoice(spec, values[key] as string, level);
       }
     }
-    if (seq.style !== before) applyStyleDensities(seq);
+    if (seq.style !== was.style) applyStyleDensities(seq);
     if (level >= 1) {
-      this.rollDrums();
+      this.rollDrums(seq);
       if (chance(0.4)) Object.assign(seq, pick(MELODY_PRESETS).values);
     }
     if (level >= 2) {
       for (const t of SYNTH_TRACKS) if (chance(level === 3 ? 0.5 : 0.3)) Object.assign(seq, pick(SOUND_PRESETS[t]).values);
     }
-    if (level === 0) this.seq.reroll(pick(["drums", "bass", "chords", "melody"] as const));
-    else this.seq.newIdea();
-    this.musicRolled();
+    // Whatever a style or a preset set, a padlocked control keeps its value.
+    const before = was as unknown as ParamValues;
+    for (const k of this.musicLocks) if (k in before) values[k] = before[k];
+    const waits = this.applyMusic(seq, level === 0 ? pick(["drums", "bass", "chords", "melody"] as const) : "new");
     const style = STYLES[seq.style]?.label ?? seq.style;
-    return level >= 2 ? `${style} · ${ROOTS[seq.root]} ${SCALES[seq.scale]?.label.toLowerCase() ?? seq.scale} · ${seq.tempo} bpm` : level === 1 ? "new idea" : "nudged";
+    const what = level >= 2 ? `${style} · ${ROOTS[seq.root]} ${SCALES[seq.scale]?.label.toLowerCase() ?? seq.scale} · ${seq.tempo} bpm` : level === 1 ? "new idea" : "nudged";
+    return waits ? `${what}, on the next bar` : what;
   }
 
   /** After the dice or an undo changed many music controls at once. */
@@ -1411,8 +1470,9 @@ export class Studio {
       this.refreshSoon(spec.key);
       this.saveGlobal();
     };
+    const locks = { keys: this.musicLocks, changed: () => this.saveMusicLocks() };
     const render = (box: HTMLElement, specs: ParamSpec[]) => {
-      const c = renderParamControls(box, specs, values, changed, "gen:");
+      const c = renderParamControls(box, specs, values, changed, "gen:", locks);
       this.seqControls.push(c);
       // The panel is short, so descriptions show in the hint line at the top instead of under each control.
       for (const row of box.querySelectorAll<HTMLElement>(".param[data-target]")) {
@@ -1448,6 +1508,26 @@ export class Studio {
     root.addEventListener("change", () => { seq.root = Number(root.value); this.seq.version++; this.saveGlobal(); root.blur(); });
     // A roll or an undo can change all three at once.
     this.seqControls.push({ refresh: () => { style.value = seq.style; scale.value = seq.scale; root.value = String(seq.root); } });
+    // Each gets a padlock like the sliders', so the dice can leave the key or the style alone.
+    for (const [key, select] of [["style", style], ["scale", scale], ["root", root]] as const) {
+      const lock = el("button", { type: "button", className: "lock", innerHTML: LOCK_ICON });
+      const show = () => {
+        const on = this.musicLocks.has(key);
+        lock.classList.toggle("on", on);
+        lock.setAttribute("aria-pressed", String(on));
+        lock.title = on ? "Locked: the dice leave this alone. Click to unlock." : "Lock, so the dice leave this alone";
+      };
+      show();
+      lock.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (this.musicLocks.has(key)) this.musicLocks.delete(key);
+        else this.musicLocks.add(key);
+        show();
+        this.saveMusicLocks();
+        lock.blur();
+      });
+      select.parentElement!.append(lock);
+    }
     render($("global-sliders"), specsOf("Song"));
     const mute = $<HTMLButtonElement>("seq-mute");
     const showMute = () => {
@@ -1705,9 +1785,9 @@ export class Studio {
   }
 
   /** A new beat in the style's spirit: each drum gets new hits and a new offset, and the drum map a new spot. */
-  private rollDrums(): void {
-    const seq = this.settings.seq as unknown as Record<string, number>;
-    const style = STYLES[this.settings.seq.style] ?? STYLES.broken;
+  private rollDrums(state: SequencerState = this.settings.seq): void {
+    const seq = state as unknown as Record<string, number>;
+    const style = STYLES[state.style] ?? STYLES.broken;
     const r = Math.random;
     for (const d of DRUMS) {
       // Around the style's own count, give or take a few.
